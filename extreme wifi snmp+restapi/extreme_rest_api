@@ -1,0 +1,118 @@
+#!/usr/bin/env python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+import requests
+import sys
+
+#enter credentials here! 
+API_USER = 'apiadmin'
+API_PASS = 'apisuperuser'
+
+
+hostname = 'localhost'
+if len(sys.argv) == 2:
+  hostname = sys.argv[1]
+
+#route to your API here!
+API_BASE_URL = 'http://%s/rest/v1/' % (hostname)
+API_LOGIN_ROUTE = 'act/login';
+API_LOGOUT_ROUTE = 'act/logout';
+API_APSTATUS_ROUTE = 'stats/noc/devices';
+API_CONTROLLER_ROUTE = 'stats/device';
+
+def login():
+  auth = requests.auth.HTTPBasicAuth(API_USER, API_PASS)
+  response = requests.get(API_BASE_URL + API_LOGIN_ROUTE, auth=auth)
+  try:
+    json = response.json()
+  except:
+    exit(1)
+    pass
+  auth_token = json['data']['auth_token']
+  return {'auth_token': auth_token}
+
+def logout(session):
+  response = requests.get(API_BASE_URL + API_LOGOUT_ROUTE, cookies=session)
+
+def main():
+  session = login()
+
+  response = requests.get(API_BASE_URL + API_CONTROLLER_ROUTE, cookies=session)
+  json = response.json()['data']
+
+  controller_firmware_version = json['version']
+
+  response = requests.get(API_BASE_URL + API_APSTATUS_ROUTE, cookies=session)
+  json = response.json()['data']
+
+  print '<<<local>>>'
+
+  for ap in json:
+    hostname = ap['hostname']
+    online = ap['online']
+    ap_firmware = 'None' if len(ap['version']) == 0 else ap['version']
+    mac = 'None' if not 'mac' in ap else ap['mac']
+    ip = 'None' if not 'ip' in ap else ap['ip']
+    model_number = 'None' if not 'model_number' in ap else ap['model_number']
+    serial_number = 'None' if not 'serial_number' in ap else ap['serial_number']
+    last_update = 'None' if not 'last_update' in ap else ap['last_update']
+    rf_domain_name = 'None' if not 'rf_domain_name' in ap else ap['rf_domain_name']
+    adopted_by = 'None' if not 'adopted_by' in ap else ap['adopted_by']
+    reporter = 'None' if not 'reporter' in ap else ap['reporter']
+
+    ## AP status
+    severity = 0 if online else 2
+    metrics = 'online=%d|offline=%d' % (1 if online else 0, 0 if online else 1)
+    description = '%s is %s' % (hostname, 'Online' if online else 'Offline')
+    print '%d %s_AP_STATUS %s - %s' % (severity, hostname, metrics, description)
+
+    ## Firmware
+    severity = 0 if ap_firmware==controller_firmware_version else 2
+    # metrics = 'online=%d|offline=%d' % (1 if online else 0, 0 if online else 1)
+    missmatch = ''
+    if (severity == 2):
+      missmatch = 'CTRL: %s; AP: %s' % (controller_firmware_version, ap_firmware)
+    description = 'Firmware %s %s' % ('OK' if severity == 0 else 'Missmatch', missmatch)
+    print '%d %s_AP_FW - %s' % (severity, hostname, description)
+
+    # AP info
+    severity = 0
+    description = 'MAC: %s; IP: %s; Model: %s' % (mac, ip, model_number)
+    print '%d %s_AP_INFO - %s' % (severity, hostname, description)
+
+    # AP serial_number
+    severity = 0
+    description = 'Serial: %s' % (serial_number)
+    print '%d %s_AP_SERIAL - %s' % (severity, hostname, description)
+
+    # AP last_update
+    from datetime import datetime
+    timestamp = last_update
+    dt_object = datetime.fromtimestamp(timestamp)
+    severity = 0
+    # metrics = 'online=%d|offline=%d' % (1 if online else 0, 0 if online else 1)
+    description = 'Last Update: %s' % (dt_object)
+    print '%d %s_AP_LU - %s' % (severity, hostname, description) 
+
+    # AP Reporter
+    severity = 0
+    description = 'Reporter: %s' % (reporter)
+    print '%d %s_AP_REP - %s' % (severity, hostname, description)
+
+    # AP RF-Domain-Name
+    severity = 0
+    description = 'RF-Domain Name: %s' % (rf_domain_name)
+    print '%d %s_AP_RFDN - %s' % (severity, hostname, description)
+
+    # AP Adopted-by
+    severity = 0
+    description = 'Adopted by: %s' % (adopted_by)
+    print '%d %s_AP_ADOBY - %s' % (severity, hostname, description)
+
+    pass
+
+  logout(session)
+
+if __name__ == "__main__":
+    main()

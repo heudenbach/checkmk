@@ -1,3 +1,7 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021 in progress
+
 def splitDisk(line):
 	result = []
 	res1 = line.split("/", 1)

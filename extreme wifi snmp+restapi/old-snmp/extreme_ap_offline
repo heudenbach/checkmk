@@ -1,0 +1,38 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+ap_offline_status = 2
+ap_online_status = 1
+
+def convert_to_mac(mac_string):
+    int_array = map(ord, mac_string)
+    hex_array = map(lambda iv: format(iv, 'x').zfill(2), int_array)
+    mac_address = ':'.join(hex_array)
+    return mac_address
+
+def inventory_ap_offline(info):
+    for line in info:
+        status, hostname = saveint(line[0]), line[1]
+        if status == ap_offline_status:
+            yield hostname, None
+        
+def check_ap_offline(item, params, info):
+    for line in info:
+        status, hostname, rf_domain, mac_address = saveint(line[0]), line[1], line[2], convert_to_mac(line[3])
+        if item == hostname:
+            yield 2, "RFD: %s, Mac: %s" % (rf_domain, mac_address)
+
+check_info["extreme_ap_offline"] = {
+    'check_function':           check_ap_offline,
+    'inventory_function':       inventory_ap_offline,
+    'service_description':      "Extreme Networks - AP offline: %s",
+    'has_perfdata':             False,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.2.1.1', [
+        7, # on/offline status (1 online, 2 Offline)
+        3, # hostnamen
+        6, # rf-domain
+        1  # mac-adresse
+    ]),
+    'snmp_scan_function':       lambda oid: oid('.1.3.6.1.4.1.388.50.1.4.2.1.1.7.*') != None
+}

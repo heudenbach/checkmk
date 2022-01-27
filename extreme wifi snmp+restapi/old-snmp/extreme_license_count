@@ -1,0 +1,49 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+def inventory_license_count(info):
+    if len(info[0]) > 1:
+        yield None, None
+        
+def check_license_count(item, params, info):
+    license_count_total = 0
+    license_in_use_total = 0
+    for ap in info:
+        total_ap_count = saveint(ap[0])
+        total_ap_inuse = saveint(ap[1])
+        license_count_total += total_ap_count
+        license_in_use_total += total_ap_inuse
+    
+    licenses_count_available = license_count_total - license_in_use_total
+    status = 0
+    if (licenses_count_available < 8):
+        status = 2
+    elif (licenses_count_available < 16):
+        status = 1
+    
+    return (
+        status, 
+        "%d licenses available, %d licenses total, %d licenses in use" % (
+            licenses_count_available, 
+            license_count_total, 
+            license_in_use_total
+        ), (
+            ('license_count_total', license_count_total), 
+            ('license_in_use_total', license_in_use_total), 
+            ('licenses_count_available', licenses_count_available)
+        )
+    )
+
+    
+check_info["extreme_license_count"] = {
+    'check_function':           check_license_count,
+    'inventory_function':       inventory_license_count,
+    'service_description':      'Extreme Networks - license count',
+    'has_perfdata':             True,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.2.43.1', [
+        '3', # total license count 
+        '7' # license in use count
+    ]),
+    'snmp_scan_function':       lambda oid: oid('.1.3.6.1.4.1.388.50.1.4.2.43.1.3.*') != None and oid('.1.3.6.1.4.1.388.50.1.4.2.43.1.7.*') != None,
+}

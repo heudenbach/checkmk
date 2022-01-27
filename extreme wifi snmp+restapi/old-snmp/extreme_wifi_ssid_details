@@ -1,0 +1,78 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+
+def parse_wifi_ssid_details(info):
+    parsed = []
+    for line in info:
+        if len(line[0]) > 0:
+            rf_domain = line[0]
+        if len(line[1]) > 0:
+            line[0] = rf_domain
+            line[2] = saveint(line[2])
+            line[3] = saveint(line[3])
+            line[4] = saveint(line[4])
+            line[5] = saveint(line[5])
+            line[6] = saveint(line[6])
+            line[7] = saveint(line[7])
+            parsed.append(line)
+    return parsed
+
+def identifier(line):
+    rf_domain, wifi_name = line[0], line[1]
+    ident = "%s / %s" % (wifi_name, rf_domain)
+    return ident
+
+def inventory_wifi_ssid_details(parsed):
+    for line in parsed:
+        yield identifier(line), None
+
+def check_wifi_ssid_details(item, params, parsed):
+    # 80 MB
+    threshold_tx_bps_warn = 640000000
+    # 100 MB
+    threshold_tx_bps_crit = 800000000
+    
+    for line in parsed:
+        if item == identifier(line):
+            rf_domain, wifi_name, tx_bytes, tx_pkts, tx_bps, rx_bytes, rx_pkts, rx_bps  = line
+
+            status = 0
+            if tx_bps > threshold_tx_bps_warn:
+                status = 1
+            if tx_bps > threshold_tx_bps_crit:
+                status = 2
+
+            yield status, "TX-Bytes: %d, TX-Pkts: %d, TX-Bps: %d, RX-Bytes: %d, RX-Pkts: %d, RX-Bps: %d" % (
+                tx_bytes, 
+                tx_pkts,
+                tx_bps,
+                rx_bytes, 
+                rx_pkts,
+                rx_bps,
+            ), [
+                ('tx_bytes', tx_bytes),
+                ('tx_pkts', tx_pkts),
+                ('tx_bps', tx_bps),
+                ('rx_bytes', rx_bytes), 
+                ('rx_pkts', rx_pkts),
+                ('rx_bps', rx_bps),
+            ]
+    
+check_info["extreme_wifi_ssid_details"] = {
+    'parse_function':           parse_wifi_ssid_details,
+    'check_function':           check_wifi_ssid_details,
+    'inventory_function':       inventory_wifi_ssid_details,
+    'service_description':      "Extreme Networks - SSID: %s",
+    'has_perfdata':             True,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.3', [
+        '1.1.1',    # RF-Domain Name
+        '2.12.1.1', # All WiFi Names
+        '2.12.1.2', # Transmit Bytes / Insgesamt
+        '2.12.1.3', # Transmit Pkts / Insgesamt
+        '2.12.1.4', # Transmit bps / sekunde | Warnung bei 80MB/s, Kritisch bei 100MB/s
+        '2.12.1.5', # Received Bytes /Insgesamt
+        '2.12.1.6', # Received Pkts / Insgesamt
+        '2.12.1.7', # Received bps / sekunde
+    ]),
+    'snmp_scan_function':       lambda oid: oid('.1.3.6.1.4.1.388.50.1.4.3.2.12.1.1.*') != None
+}

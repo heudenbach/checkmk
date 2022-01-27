@@ -1,0 +1,23 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+def inventory_wifi_client_count(info):
+    if len(info[0][0]) > 0:
+        yield None, None
+        
+def check_wifi_client_count(item, params, info):
+    connected_clients_count = saveint(info[0][0])
+    status = 0 if connected_clients_count >= 10 else 2
+    return (status, "%d Clients online" % connected_clients_count, [('connected_clients_count', connected_clients_count)])
+
+check_info["extreme_wifi_client_count"] = {
+    'check_function':           check_wifi_client_count,
+    'inventory_function':       inventory_wifi_client_count,
+    'service_description':      'Extreme Networks - WiFi connected clients count',
+    'has_perfdata':             True,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.1.15.1', [
+        '0' # All known WiFi connected clients count
+    ]),
+    'snmp_scan_function':       lambda oid: oid(".1.3.6.1.4.1.388.50.1.4.1.15.1.0") != None
+}

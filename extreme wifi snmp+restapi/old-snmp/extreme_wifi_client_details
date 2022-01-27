@@ -1,0 +1,72 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+def convert_to_mac(mac_string):
+    int_array = map(ord, mac_string)
+    hex_array = map(lambda iv: format(iv, 'x').zfill(2), int_array)
+    mac_address = ':'.join(hex_array)
+    return mac_address
+
+def identifier(line):
+    hostname, mac = line[0], convert_to_mac(line[2])
+    ident = "%s / %s" % (hostname, mac)
+    return ident
+
+def inventory_wifi_client_details(info):
+    for line in info:
+        yield identifier(line), None
+
+def check_wifi_client_details(item, params, info):
+    for line in info:
+        if item == identifier(line):
+            hostname = line[0]
+            ap = line[1]
+            mac = convert_to_mac(line[2])
+            ip = line[3]
+            manufacturer = line[4]
+            bssid = convert_to_mac(line[5])
+            ap_mac = convert_to_mac(line[6])
+            band = line[7]
+            encryption = line[8]
+            ssid = line[9]
+            vlan = saveint(line[10])
+            username = line[11] if len(line[11]) > 0 else "None"
+            rf_domain = line[12]
+            
+            yield 0, "AP: %s, IP: %s, Manufacturer: %s, BSSID: %s, AP-Mac: %s, Band: %s, Encryption: %s, SSID: %s, VLAN: %s, Username: %s, RFD: %s" % (
+                ap, 
+                ip, 
+                manufacturer, 
+                bssid, 
+                ap_mac, 
+                band, 
+                encryption, 
+                ssid, 
+                vlan, 
+                username, 
+                rf_domain, 
+            )
+        
+check_info["extreme_wifi_client_details"] = {
+    'check_function':           check_wifi_client_details,
+    'inventory_function':       inventory_wifi_client_details,
+    'service_description':      "Extreme Networks - WiFi-Client: %s",
+    'has_perfdata':             False,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.3.2.3.1.1', [
+        2,  # Host Name verbundener Client
+        17, # AP mit dem der client verbunden ist
+        1,  # MAC-Adresse 
+        15, # IP
+        3,  # Hersteller
+        4,  # BSSID (radio-mac-adressliste für roaming map)
+        5,  # Associated AP (ap-Mac Adresse von AP)
+        7,  # Band
+        8,  # Verschlüsselung
+        10, # WiFi
+        13, # VLAN
+        14, # Username 
+        16, # RF-Domain
+    ]),
+    'snmp_scan_function':       lambda oid: oid('.1.3.6.1.4.1.388.50.1.4.3.2.3.1.1.2.*') != None,
+}

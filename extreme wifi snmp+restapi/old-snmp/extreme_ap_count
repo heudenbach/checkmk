@@ -1,0 +1,29 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+def inventory_ap_status(info):
+    if len(info[0]) > 1:
+        yield None, None
+        
+def check_ap_status(item, params, info):
+    online_count = saveint(info[0][0])
+    offline_count = saveint(info[0][1])
+
+    online_status = 0
+    offline_status = 2 if offline_count > 0 else 0
+    
+    yield online_status, "%d APs online" % (online_count), [('online_count', online_count)]
+    yield offline_status, "%d APs offline" % (offline_count), [('offline_count', offline_count)]
+    
+check_info["extreme_ap_count"] = {
+    'check_function':           check_ap_status,
+    'inventory_function':       inventory_ap_status,
+    'service_description':      'Extreme Networks - AP online status',
+    'has_perfdata':             True,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.1', [
+        '9.3.0', # All online AP count
+        '14.2.0' # All offline AP count
+    ]),
+    'snmp_scan_function':       lambda oid: oid('.1.3.6.1.4.1.388.50.1.4.1.9.3.0') != None and oid('.1.3.6.1.4.1.388.50.1.4.1.14.2.0') != None
+}

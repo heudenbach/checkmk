@@ -1,0 +1,49 @@
+#!/usr/bin/python
+# -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H. Eudenbach in the year 2021
+
+def convert_to_mac(mac_string):
+    int_array = map(ord, mac_string)
+    hex_array = map(lambda iv: format(iv, 'x').zfill(2), int_array)
+    mac_address = ':'.join(hex_array)
+    return mac_address
+
+def is_mac_address(possible_mac_adress):
+    val_raw = possible_mac_adress.encode('unicode-escape')
+    return True if "\\" in val_raw else False
+
+def inventory_ap_details(info):
+    for line in info:
+        yield line[0], None
+
+def check_ap_details(item, params, info):
+    for line in info:
+        if item == line[0]:
+            mac = convert_to_mac(line[1]) if is_mac_address(line[1]) else ""
+            client_count = saveint(line[2])
+            modell = line[3]
+            rf_domain = line[4]
+            ip_address = line[5]
+            yield 0, "Mac: %s, Clients: %d, Modell: %s, RF-Domain: %s, IP-Address: %s" % (
+                mac, 
+                client_count,
+                modell,
+                rf_domain,
+                ip_address
+            ), [('client_count', client_count)]
+    
+check_info["extreme_ap_details"] = {
+    'check_function':           check_ap_details,
+    'inventory_function':       inventory_ap_details,
+    'service_description':      "Extreme Networks - AP: %s",
+    'has_perfdata':             True,
+    'snmp_info':                ('.1.3.6.1.4.1.388.50.1.4.3.2.1.1.1', [
+        9,  # name,
+        1,  # mac-address,
+        4,  # client-count
+        6,  # ap-modell
+        10, # rf-domain
+        13, # ip-address
+    ]),
+    'snmp_scan_function':       lambda oid: oid('.1.3.6.1.4.1.388.50.1.4.3.2.1.1.1.9.*') != None
+}
