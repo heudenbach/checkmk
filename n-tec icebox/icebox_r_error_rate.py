@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # -*- encoding: utf-8; py-indent-offset: 4 -*-
-# H. Eudenbach in the year 2021 in progress
+# H.Eudenbach in 2021 - holger@eude.rocks
 
 from .agent_based_api.v1 import *
 import re

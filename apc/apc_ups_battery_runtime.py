@@ -10,7 +10,7 @@
 #   type, the description of the object identifies both of the reference
 #   epochs.
 #
-# H. Eudenbach in the year 2021
+# H.Eudenbach in 2021 - holger@eude.rocks
 
 
 def inventory_apc_ups_battery_runtime(info):

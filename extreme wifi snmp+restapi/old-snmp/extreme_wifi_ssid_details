@@ -1,5 +1,6 @@
 #!/usr/bin/python
 # -*- encoding: utf-8; py-indent-offset: 4 -*-
+# H.Eudenbach in 2021 - holger@eude.rocks
 
 def parse_wifi_ssid_details(info):
     parsed = []

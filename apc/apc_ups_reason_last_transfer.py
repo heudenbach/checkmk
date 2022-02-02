@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # -*- encoding: utf-8; py-indent-offset: 4 -*-
-# H. Eudenbach in the year 2021
+# H.Eudenbach in 2021 - holger@eude.rocks
 
 reasons = [
     'No events',
