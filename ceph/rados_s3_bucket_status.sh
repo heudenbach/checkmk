@@ -10,7 +10,7 @@
 # if no quota is set, status will always be 0 - 0, works only for Buckets of 1GB or higher!
 
 # change this to the bucket you want to watch
-bucket=lferner_bucket
+bucket=BUCKETNAME
 
 # getting sizes
 radosgw_s3_size_actual=$(
