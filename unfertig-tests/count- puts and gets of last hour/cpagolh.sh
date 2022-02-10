@@ -47,7 +47,7 @@ GETSTD=grep "$(date +['%-m/%-d %H:%M:%S: %Z'])" /var/log/syslog | grep -c 'GET')
 
 /var/log/httpd/access_log
 
-# Veriablen
+# Variablen
 PUTWRITE="$(echo $PUTSTD)"
 GETWRITE="$(echo $GETSTD)"
 
