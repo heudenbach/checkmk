@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+
+import re
+from pathlib import Path
+
+CONFIG_FILE = Path("/etc/checkmk/html_content_check.cfg")
+
+STATE_OK = 0
+STATE_WARN = 1
+STATE_CRIT = 2
+STATE_UNKNOWN = 3
+
+
+def safe(value: str) -> str:
+    return value.replace("|", "/")
+
+
+def emit(service: str, state: int, message: str) -> None:
+    print(f"{safe(service)}|{state}|{safe(message)}")
+
+
+def check_file(service: str, file_path: str, mode: str, default_state: int, rules: list[str]) -> None:
+    path = Path(file_path)
+
+    if not path.exists():
+        emit(service, STATE_CRIT, f"File not found: {file_path}")
+        return
+
+    if not path.is_file():
+        emit(service, STATE_CRIT, f"Path is not a file: {file_path}")
+        return
+
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        emit(service, STATE_UNKNOWN, f"Could not read file: {exc}")
+        return
+
+    for rule in rules:
+        try:
+            pattern, state_raw = rule.rsplit("=", 1)
+            state = int(state_raw)
+        except ValueError:
+            emit(service, STATE_UNKNOWN, f"Invalid status rule: {rule}")
+            return
+
+        try:
+            if mode == "regex":
+                found = re.search(pattern, content, re.MULTILINE | re.DOTALL) is not None
+            else:
+                found = pattern in content
+        except Exception as exc:
+            emit(service, STATE_UNKNOWN, f"Invalid pattern '{pattern}': {exc}")
+            return
+
+        if found:
+            emit(service, state, f"Matched pattern: {pattern}")
+            return
+
+    emit(service, default_state, "No status pattern matched")
+
+def main() -> None:
+    print("<<<html_content_check:sep(124)>>>")
+
+    if not CONFIG_FILE.exists():
+        emit("Configuration", STATE_UNKNOWN, f"Missing config file: {CONFIG_FILE}")
+        return
+
+    for line_number, line in enumerate(CONFIG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        line = line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+
+
+
+        parts = line.split("|")
+
+        if len(parts) < 5:
+        emit(
+            "Configuration",
+            STATE_UNKNOWN,
+            f"Invalid config line {line_number}: expected at least 5 fields",
+        )
+        continue
+
+        service, file_path, mode, default_state_raw, *rules = parts
+
+        try:
+        default_state = int(default_state_raw)
+        except ValueError:
+        emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state_raw}")
+        continue
+
+        if default_state not in (
+        STATE_OK,
+        STATE_WARN,
+        STATE_CRIT,
+        STATE_UNKNOWN,
+        ):
+        emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state}")
+        continue
+
+        if mode not in ("contains", "regex"):
+        emit(service, STATE_UNKNOWN, f"Invalid mode: {mode}")
+        continue
+
+        if not rules:
+        emit(service, STATE_UNKNOWN, "No status rules configured")
+        continue
+
+        check_file(
+        service,
+        file_path,
+        mode,
+        default_state,
+        rules,
+        )
+
+
+
+if __name__ == "__main__":
+    main()
