@@ -73,6 +73,7 @@ def get_html_content_check_files(conf: HtmlContentCheckConfig) -> FileGenerator:
         base_os=OS.LINUX,
         source=Path("html_content_check"),
         target=Path("html_content_check"),
+        interval=0,
     )
 
     yield PluginConfig(
@@ -80,7 +81,10 @@ def get_html_content_check_files(conf: HtmlContentCheckConfig) -> FileGenerator:
         lines=_config_lines(conf),
         target=Path("html_content_check.cfg"),
         include_header=False,
-    )  
+    )
+
+
+
 
 
 register.bakery_plugin(

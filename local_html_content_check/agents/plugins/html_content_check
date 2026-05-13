@@ -3,24 +3,18 @@
 import re
 from pathlib import Path
 
-#CONFIG_FILE = Path("/etc/check_mk/html_content_check.cfg")
+PLUGIN_FILE = Path(__file__).resolve()
+PACKAGE_DIR = PLUGIN_FILE.parent.parent
 
-CONFIG_POINTER_FILE = Path("/etc/check_mk/html_content_check.path")
-DEFAULT_CONFIG_FILE = Path("/etc/check_mk/html_content_check.cfg")
+CONFIG_FILE = PACKAGE_DIR / "config" / "html_content_check.cfg"
+FALLBACK_CONFIG_FILE = Path("/etc/check_mk/html_content_check.cfg")
 
 
 def get_config_file() -> Path:
-    if CONFIG_POINTER_FILE.exists():
-        configured_path = CONFIG_POINTER_FILE.read_text(
-            encoding="utf-8",
-            errors="replace",
-        ).strip()
+    if CONFIG_FILE.exists():
+        return CONFIG_FILE
 
-        if configured_path:
-            return Path(configured_path)
-
-    return DEFAULT_CONFIG_FILE
-
+    return FALLBACK_CONFIG_FILE
 
 STATE_OK = 0
 STATE_WARN = 1
@@ -80,9 +74,6 @@ def check_file(service: str, file_path: str, mode: str, default_state: int, rule
 def main() -> None:
     print("<<<html_content_check:sep(124)>>>")
 
-#    if not CONFIG_FILE.exists():
-#        emit("Configuration", STATE_UNKNOWN, f"Missing config file: {CONFIG_FILE}")
-#        return
     config_file = get_config_file()
 
     if not config_file.exists():
@@ -90,7 +81,6 @@ def main() -> None:
         return
 
     for line_number, line in enumerate(
-#        CONFIG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(),
         config_file.read_text(encoding="utf-8", errors="replace").splitlines(),
         1,
     ):

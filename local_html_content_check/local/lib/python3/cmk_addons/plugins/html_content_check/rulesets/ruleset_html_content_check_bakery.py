@@ -32,14 +32,6 @@ def _parameter_form():
         title=Title("HTML content checks"),
         help_text=Help("Configure local HTML content status checks for the Checkmk agent."),
         elements={
-            "config_dir": DictElement(
-                required=True,
-                parameter_form=String(
-                    title=Title("Configuration directory"),
-                    prefill=DefaultValue("/etc/check_mk"),
-                ),
-            ),
-    
             "checks": DictElement(
                 required=True,
                 parameter_form=List(
