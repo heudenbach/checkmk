@@ -3,7 +3,24 @@
 import re
 from pathlib import Path
 
-CONFIG_FILE = Path("/etc/checkmk/html_content_check.cfg")
+#CONFIG_FILE = Path("/etc/check_mk/html_content_check.cfg")
+
+CONFIG_POINTER_FILE = Path("/etc/check_mk/html_content_check.path")
+DEFAULT_CONFIG_FILE = Path("/etc/check_mk/html_content_check.cfg")
+
+
+def get_config_file() -> Path:
+    if CONFIG_POINTER_FILE.exists():
+        configured_path = CONFIG_POINTER_FILE.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).strip()
+
+        if configured_path:
+            return Path(configured_path)
+
+    return DEFAULT_CONFIG_FILE
+
 
 STATE_OK = 0
 STATE_WARN = 1
@@ -59,65 +76,71 @@ def check_file(service: str, file_path: str, mode: str, default_state: int, rule
 
     emit(service, default_state, "No status pattern matched")
 
+
 def main() -> None:
     print("<<<html_content_check:sep(124)>>>")
 
-    if not CONFIG_FILE.exists():
-        emit("Configuration", STATE_UNKNOWN, f"Missing config file: {CONFIG_FILE}")
+#    if not CONFIG_FILE.exists():
+#        emit("Configuration", STATE_UNKNOWN, f"Missing config file: {CONFIG_FILE}")
+#        return
+    config_file = get_config_file()
+
+    if not config_file.exists():
+        emit("Configuration", STATE_UNKNOWN, f"Missing config file: {config_file}")
         return
 
-    for line_number, line in enumerate(CONFIG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+    for line_number, line in enumerate(
+#        CONFIG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(),
+        config_file.read_text(encoding="utf-8", errors="replace").splitlines(),
+        1,
+    ):
         line = line.strip()
 
         if not line or line.startswith("#"):
             continue
 
-
-
-
         parts = line.split("|")
 
         if len(parts) < 5:
-        emit(
-            "Configuration",
-            STATE_UNKNOWN,
-            f"Invalid config line {line_number}: expected at least 5 fields",
-        )
-        continue
+            emit(
+                "Configuration",
+                STATE_UNKNOWN,
+                f"Invalid config line {line_number}: expected at least 5 fields",
+            )
+            continue
 
         service, file_path, mode, default_state_raw, *rules = parts
 
         try:
-        default_state = int(default_state_raw)
+            default_state = int(default_state_raw)
         except ValueError:
-        emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state_raw}")
-        continue
+            emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state_raw}")
+            continue
 
         if default_state not in (
-        STATE_OK,
-        STATE_WARN,
-        STATE_CRIT,
-        STATE_UNKNOWN,
+            STATE_OK,
+            STATE_WARN,
+            STATE_CRIT,
+            STATE_UNKNOWN,
         ):
-        emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state}")
-        continue
+            emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state}")
+            continue
 
         if mode not in ("contains", "regex"):
-        emit(service, STATE_UNKNOWN, f"Invalid mode: {mode}")
-        continue
+            emit(service, STATE_UNKNOWN, f"Invalid mode: {mode}")
+            continue
 
         if not rules:
-        emit(service, STATE_UNKNOWN, "No status rules configured")
-        continue
+            emit(service, STATE_UNKNOWN, "No status rules configured")
+            continue
 
         check_file(
-        service,
-        file_path,
-        mode,
-        default_state,
-        rules,
+            service,
+            file_path,
+            mode,
+            default_state,
+            rules,
         )
-
 
 
 if __name__ == "__main__":
