@@ -9,6 +9,11 @@ PACKAGE_DIR = PLUGIN_FILE.parent.parent
 CONFIG_FILE = PACKAGE_DIR / "config" / "html_content_check.cfg"
 FALLBACK_CONFIG_FILE = Path("/etc/check_mk/html_content_check.cfg")
 
+STATE_OK = 0
+STATE_WARN = 1
+STATE_CRIT = 2
+STATE_UNKNOWN = 3
+
 
 def get_config_file() -> Path:
     if CONFIG_FILE.exists():
@@ -16,21 +21,131 @@ def get_config_file() -> Path:
 
     return FALLBACK_CONFIG_FILE
 
-STATE_OK = 0
-STATE_WARN = 1
-STATE_CRIT = 2
-STATE_UNKNOWN = 3
-
 
 def safe(value: str) -> str:
     return value.replace("|", "/")
 
 
-def emit(service: str, state: int, message: str) -> None:
-    print(f"{safe(service)}|{state}|{safe(message)}")
+def emit(
+    service: str,
+    state: int,
+    message: str,
+    metric_value: float | None = None,
+) -> None:
+    if metric_value is None:
+        print(f"{safe(service)}|{state}|{safe(message)}")
+    else:
+        print(f"{safe(service)}|{state}|{safe(message)}|{metric_value}")
 
 
-def check_file(service: str, file_path: str, mode: str, default_state: int, rules: list[str]) -> None:
+def extract_number(content: str) -> float:
+    match = re.search(r"-?\d+(?:[.,]\d+)?", content)
+
+    if not match:
+        raise ValueError("No numeric value found")
+
+    return float(match.group(0).replace(",", "."))
+
+
+def is_numeric_operator(operator: str) -> bool:
+    return operator in (
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "between",
+        "outside",
+    )
+
+
+def rule_matches(content: str, operator: str, expected: str) -> bool:
+    text = content.strip()
+
+    if operator == "contains":
+        return expected in content
+
+    if operator == "equals":
+        return text == expected
+
+    if operator == "regex":
+        return re.search(expected, content, re.MULTILINE | re.DOTALL) is not None
+
+    if operator == "startswith":
+        return text.startswith(expected)
+
+    if operator == "endswith":
+        return text.endswith(expected)
+
+    if operator in ("<", "<=", ">", ">="):
+        actual_number = extract_number(content)
+        expected_number = float(expected.replace(",", "."))
+
+        if operator == "<":
+            return actual_number < expected_number
+
+        if operator == "<=":
+            return actual_number <= expected_number
+
+        if operator == ">":
+            return actual_number > expected_number
+
+        if operator == ">=":
+            return actual_number >= expected_number
+
+    if operator == "between":
+        actual_number = extract_number(content)
+
+        minimum_raw, maximum_raw = expected.split(":", 1)
+
+        minimum = float(minimum_raw.replace(",", "."))
+        maximum = float(maximum_raw.replace(",", "."))
+
+        return minimum <= actual_number <= maximum
+
+    if operator == "outside":
+        actual_number = extract_number(content)
+
+        minimum_raw, maximum_raw = expected.split(":", 1)
+
+        minimum = float(minimum_raw.replace(",", "."))
+        maximum = float(maximum_raw.replace(",", "."))
+
+        return actual_number < minimum or actual_number > maximum
+
+    raise ValueError(f"Unsupported operator: {operator}")
+
+
+def parse_rule(rule: str) -> tuple[str, str, int]:
+    rule_expression, state_raw = rule.rsplit("=", 1)
+
+    state = int(state_raw)
+
+    for candidate in (
+        "contains",
+        "equals",
+        "regex",
+        "startswith",
+        "endswith",
+        "between",
+        "outside",
+        "<=",
+        ">=",
+        "<",
+        ">",
+    ):
+        if rule_expression.startswith(candidate):
+            expected = rule_expression[len(candidate):].lstrip("=")
+            return candidate, expected, state
+
+    raise ValueError(f"Unsupported operator in rule: {rule}")
+
+
+def check_file(
+    service: str,
+    file_path: str,
+    default_state: int,
+    rules: list[str],
+) -> None:
     path = Path(file_path)
 
     if not path.exists():
@@ -49,26 +164,51 @@ def check_file(service: str, file_path: str, mode: str, default_state: int, rule
 
     for rule in rules:
         try:
-            pattern, state_raw = rule.rsplit("=", 1)
-            state = int(state_raw)
-        except ValueError:
-            emit(service, STATE_UNKNOWN, f"Invalid status rule: {rule}")
+            operator, expected, state = parse_rule(rule)
+        except Exception as exc:
+            emit(service, STATE_UNKNOWN, f"Invalid status rule: {rule} ({exc})")
+            return
+
+        if state not in (
+            STATE_OK,
+            STATE_WARN,
+            STATE_CRIT,
+            STATE_UNKNOWN,
+        ):
+            emit(service, STATE_UNKNOWN, f"Invalid rule state: {state}")
             return
 
         try:
-            if mode == "regex":
-                found = re.search(pattern, content, re.MULTILINE | re.DOTALL) is not None
-            else:
-                found = pattern in content
+            if rule_matches(content, operator, expected):
+                if is_numeric_operator(operator):
+                    found_value = extract_number(content)
+
+                    emit(
+                        service,
+                        state,
+                        f"Found value={found_value} | Matched rule: {operator} {expected}",
+                        found_value,
+                    )
+                else:
+                    found_value = content.strip().replace("\n", " ")[:120]
+
+                    emit(
+                        service,
+                        state,
+                        f"Found value={found_value} | Matched rule: {operator} {expected}",
+                    )
+
+                return
+
         except Exception as exc:
-            emit(service, STATE_UNKNOWN, f"Invalid pattern '{pattern}': {exc}")
+            emit(
+                service,
+                STATE_UNKNOWN,
+                f"Rule error '{operator} {expected}': {exc}",
+            )
             return
 
-        if found:
-            emit(service, state, f"Matched pattern: {pattern}")
-            return
-
-    emit(service, default_state, "No status pattern matched")
+    emit(service, default_state, "No status rule matched")
 
 
 def main() -> None:
@@ -77,11 +217,18 @@ def main() -> None:
     config_file = get_config_file()
 
     if not config_file.exists():
-        emit("Configuration", STATE_UNKNOWN, f"Missing config file: {config_file}")
+        emit(
+            "Configuration",
+            STATE_UNKNOWN,
+            f"Missing config file: {config_file}",
+        )
         return
 
     for line_number, line in enumerate(
-        config_file.read_text(encoding="utf-8", errors="replace").splitlines(),
+        config_file.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines(),
         1,
     ):
         line = line.strip()
@@ -91,20 +238,24 @@ def main() -> None:
 
         parts = line.split("|")
 
-        if len(parts) < 5:
+        if len(parts) < 4:
             emit(
                 "Configuration",
                 STATE_UNKNOWN,
-                f"Invalid config line {line_number}: expected at least 5 fields",
+                f"Invalid config line {line_number}: expected at least 4 fields",
             )
             continue
 
-        service, file_path, mode, default_state_raw, *rules = parts
+        service, file_path, default_state_raw, *rules = parts
 
         try:
             default_state = int(default_state_raw)
         except ValueError:
-            emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state_raw}")
+            emit(
+                service,
+                STATE_UNKNOWN,
+                f"Invalid default state: {default_state_raw}",
+            )
             continue
 
         if default_state not in (
@@ -113,11 +264,11 @@ def main() -> None:
             STATE_CRIT,
             STATE_UNKNOWN,
         ):
-            emit(service, STATE_UNKNOWN, f"Invalid default state: {default_state}")
-            continue
-
-        if mode not in ("contains", "regex"):
-            emit(service, STATE_UNKNOWN, f"Invalid mode: {mode}")
+            emit(
+                service,
+                STATE_UNKNOWN,
+                f"Invalid default state: {default_state}",
+            )
             continue
 
         if not rules:
@@ -127,7 +278,6 @@ def main() -> None:
         check_file(
             service,
             file_path,
-            mode,
             default_state,
             rules,
         )

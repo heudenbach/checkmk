@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from pathlib import Path
-from typing import TypedDict, List
+from typing import Any, TypedDict, List
 
 from .bakery_api.v1 import (
     OS,
@@ -14,14 +14,14 @@ from .bakery_api.v1 import (
 
 
 class HtmlContentStatusRule(TypedDict):
-    pattern: str
+    condition: tuple[str, Any]
     state: str
 
 
 class HtmlContentCheckItem(TypedDict):
+    service_prefix: str
     service: str
     file_path: str
-    mode: str
     default_state: str
     status_rules: List[HtmlContentStatusRule]
 
@@ -38,8 +38,45 @@ STATE_MAP = {
 }
 
 
+OPERATOR_MAP = {
+    "contains": "contains",
+    "equals": "equals",
+    "regex": "regex",
+    "startswith": "startswith",
+    "endswith": "endswith",
+    "less_than": "<",
+    "less_equal": "<=",
+    "greater_than": ">",
+    "greater_equal": ">=",
+    "between": "between",
+    "outside": "outside",
+}
+
+
 def _sanitize(value: str) -> str:
     return value.replace("|", "/")
+
+
+def _service_name(check: HtmlContentCheckItem) -> str:
+    prefix = check.get("service_prefix", "Content of").strip()
+    service = check["service"].strip()
+
+    if prefix:
+        return f"{prefix} {service}"
+
+    return service
+
+
+def _condition_parts(rule: HtmlContentStatusRule) -> tuple[str, str]:
+    operator_name, value = rule["condition"]
+    operator = OPERATOR_MAP.get(operator_name, "contains")
+
+    if operator_name in ("between", "outside"):
+        value_string = f"{value['min']}:{value['max']}"
+    else:
+        value_string = str(value)
+
+    return operator, value_string
 
 
 def _config_lines(conf: HtmlContentCheckConfig) -> List[str]:
@@ -49,15 +86,17 @@ def _config_lines(conf: HtmlContentCheckConfig) -> List[str]:
         status_rules = []
 
         for rule in check.get("status_rules", []):
-            pattern = _sanitize(rule["pattern"])
+            operator, value = _condition_parts(rule)
             state = STATE_MAP.get(rule["state"], "3")
-            status_rules.append(f"{pattern}={state}")
+
+            status_rules.append(
+                f"{_sanitize(operator)}={_sanitize(value)}={state}"
+            )
 
         line = "|".join(
             [
-                _sanitize(check["service"]),
+                _sanitize(_service_name(check)),
                 _sanitize(check["file_path"]),
-                check["mode"],
                 STATE_MAP.get(check["default_state"], "3"),
                 *status_rules,
             ]
@@ -82,9 +121,6 @@ def get_html_content_check_files(conf: HtmlContentCheckConfig) -> FileGenerator:
         target=Path("html_content_check.cfg"),
         include_header=False,
     )
-
-
-
 
 
 register.bakery_plugin(
