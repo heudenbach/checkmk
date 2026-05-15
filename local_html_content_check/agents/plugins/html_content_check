@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from typing import Optional
 
 PLUGIN_FILE = Path(__file__).resolve()
 PACKAGE_DIR = PLUGIN_FILE.parent.parent
@@ -30,7 +31,7 @@ def emit(
     service: str,
     state: int,
     message: str,
-    metric_value: float | None = None,
+    metric_value: Optional[float] = None
 ) -> None:
     if metric_value is None:
         print(f"{safe(service)}|{state}|{safe(message)}")
