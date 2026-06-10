@@ -24,3 +24,4 @@ Text contains,  Text equals, Regular Expression, Text Starts with, Text Ends wit
 
 All Numeric Values include Metrics.
 
+Bake and Deploy the new Agent, then make a Discovery on the Host you picked.
