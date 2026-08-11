@@ -1,0 +1,10 @@
+#!/bin/bash
+
+RESULT_FILE="/var/lib/trivy/results/checkmk.json"
+
+if [[ ! -r "$RESULT_FILE" ]]; then
+    exit 0
+fi
+
+echo '<<<trivy_report:sep(0)>>>'
+cat "$RESULT_FILE"
