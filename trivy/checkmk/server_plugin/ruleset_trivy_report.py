@@ -8,9 +8,7 @@ from cmk.rulesets.v1.form_specs import (
     Dictionary,
     DictElement,
     FixedValue,
-    Float,
     Integer,
-    List,
 )
 from cmk.rulesets.v1.form_specs.validators import NumberInRange
 from cmk.rulesets.v1.rule_specs import (
@@ -76,53 +74,22 @@ def _optional_age_threshold(title_text, help_text, default_hours):
     )
 
 
-def _range_form():
+def _severity_form(title_text):
     return Dictionary(
-        title=Title("CVSS range"),
+        title=Title(title_text),
         elements={
-            "minimum": DictElement(
-                required=True,
-                parameter_form=Float(
-                    title=Title("Minimum CVSS score"),
-                    prefill=DefaultValue(0.0),
-                    custom_validate=(
-                        NumberInRange(
-                            min_value=0.0,
-                            max_value=10.0,
-                        ),
-                    ),
-                ),
-            ),
-
-            "maximum": DictElement(
-                required=True,
-                parameter_form=Float(
-                    title=Title("Maximum CVSS score"),
-                    prefill=DefaultValue(10.0),
-                    custom_validate=(
-                        NumberInRange(
-                            min_value=0.0,
-                            max_value=10.0,
-                        ),
-                    ),
-                ),
-            ),
-
             "warn_count": DictElement(
                 required=True,
                 parameter_form=_optional_threshold(
                     "WARN threshold",
-                    "Enable this threshold if this CVSS range "
-                    "should cause WARN.",
+                    f"Number of {title_text} findings required for WARN.",
                 ),
             ),
-
             "crit_count": DictElement(
                 required=True,
                 parameter_form=_optional_threshold(
                     "CRIT threshold",
-                    "Enable this threshold if this CVSS range "
-                    "should cause CRIT.",
+                    f"Number of {title_text} findings required for CRIT.",
                 ),
             ),
         },
@@ -133,43 +100,36 @@ def _parameter_form():
     return Dictionary(
         title=Title("Trivy vulnerability report"),
         elements={
-            "ranges": DictElement(
+            "critical": DictElement(
                 required=True,
-                parameter_form=List(
-                    title=Title("CVSS score ranges"),
-                    help_text=Help(
-                        "Define any number of CVSS ranges. "
-                        "Ranges must not overlap."
-                    ),
-                    element_template=_range_form(),
-                    editable_order=True,
-                ),
+                parameter_form=_severity_form("CRITICAL"),
             ),
 
-            "unknown_warn": DictElement(
+            "high": DictElement(
                 required=True,
-                parameter_form=_optional_threshold(
-                    "WARN for findings without CVSS",
-                    "Configure whether findings without a numerical "
-                    "CVSS score should cause WARN.",
-                ),
+                parameter_form=_severity_form("HIGH"),
             ),
 
-            "unknown_crit": DictElement(
+            "medium": DictElement(
                 required=True,
-                parameter_form=_optional_threshold(
-                    "CRIT for findings without CVSS",
-                    "Configure whether findings without a numerical "
-                    "CVSS score should cause CRIT.",
-                ),
+                parameter_form=_severity_form("MEDIUM"),
+            ),
+
+            "low": DictElement(
+                required=True,
+                parameter_form=_severity_form("LOW"),
+            ),
+
+            "unknown": DictElement(
+                required=True,
+                parameter_form=_severity_form("UNKNOWN"),
             ),
 
             "age_warn": DictElement(
                 required=True,
                 parameter_form=_optional_age_threshold(
                     "WARN if Trivy report is too old",
-                    "Set the maximum report age before the service "
-                    "changes to WARN.",
+                    "Maximum report age before WARN.",
                     8,
                 ),
             ),
@@ -178,8 +138,7 @@ def _parameter_form():
                 required=True,
                 parameter_form=_optional_age_threshold(
                     "CRIT if Trivy report is too old",
-                    "Set the maximum report age before the service "
-                    "changes to CRIT.",
+                    "Maximum report age before CRIT.",
                     14,
                 ),
             ),
