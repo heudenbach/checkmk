@@ -1,5 +1,7 @@
 # Trivy Vulnerability Monitoring for Checkmk
 
+**Documentation:** 🇬🇧 [English](README_EN.md) | 🇩🇪 **Deutsch**
+
 Integration von Trivy in Checkmk mit Vendor-Severity, Laufzeitrelevanz,
 CISA KEV, EPSS und P1--P4-Priorisierung.
 
@@ -62,7 +64,7 @@ zentralen Stelle gesammelt werden.
 
 ## 1. Architektur
 
-``` text
+```text
 Trivy
   -> trivy_scan.sh -> /var/lib/trivy/results/rootfs.json
   -> trivy_reduce.sh -> /var/lib/trivy/results/checkmk.json
@@ -81,11 +83,11 @@ und Kernel-Relevanz sowie KEV/EPSS ergänzen die Bewertung.
 
 Auf dem überwachten Linux-Host werden benötigt:
 
--   Trivy
--   Python 3
--   `jq`
--   Checkmk Agent
--   ausgehender HTTPS-Zugriff für Trivy und Threat Intelligence
+- Trivy
+- Python 3
+- `jq`
+- Checkmk Agent
+- ausgehender HTTPS-Zugriff für Trivy und Threat Intelligence
 
 Getestet wurde die Logik insbesondere mit Ubuntu/Debian sowie RHEL;
 Rocky Linux und AlmaLinux verwenden ebenfalls das RPM-Paketbackend.
@@ -94,7 +96,7 @@ Rocky Linux und AlmaLinux verwenden ebenfalls das RPM-Paketbackend.
 
 ### Ubuntu / Debian
 
-``` bash
+```bash
 apt-get update
 apt-get install -y wget gnupg jq python3
 
@@ -112,7 +114,7 @@ trivy --version
 
 ### RHEL / Rocky Linux / AlmaLinux
 
-``` bash
+```bash
 cat >/etc/yum.repos.d/trivy.repo <<'EOF'
 [trivy]
 name=Trivy repository
@@ -128,7 +130,7 @@ trivy --version
 
 ## 4. Verzeichnisse
 
-``` bash
+```bash
 mkdir -p /var/lib/trivy/results
 chmod 755 /var/lib/trivy /var/lib/trivy/results
 ```
@@ -182,24 +184,23 @@ chmod 755 /usr/local/bin/trivy_*
 
 `trivy_scan.sh` erzeugt die Trivy-Rohdaten in:
 
-``` text
+```text
 /var/lib/trivy/results/rootfs.json
 ```
 
-`trivy_reduce.sh` erzeugt den für Monitoring und Reporting aufbereiteten
-Report:
+`trivy_reduce.sh` erzeugt den für Monitoring und Reporting aufbereiteten Report:
 
-``` text
+```text
 /var/lib/trivy/results/checkmk.json
 ```
 
-Der Reducer erkennt unter anderem Distribution, Vendor-Key,
-Paketbackend, Architektur, laufenden Kernel, Kernelpaket,
-geladene/verfügbare Kernelmodule und Runtime-Nutzung betroffener Pakete.
+Der Reducer erkennt unter anderem Distribution, Vendor-Key, Paketbackend,
+Architektur, laufenden Kernel, Kernelpaket, geladene/verfügbare Kernelmodule
+und Runtime-Nutzung betroffener Pakete.
 
 Kernelzustände können beispielsweise sein:
 
-``` text
+```text
 active
 inactive
 present_builtin
@@ -211,7 +212,7 @@ unknown
 
 Die operative Klassifikation verwendet insbesondere:
 
-``` text
+```text
 ACTION_REQUIRED
 REVIEW
 ```
@@ -219,7 +220,7 @@ REVIEW
 `trivy_threatintel.py` ergänzt `checkmk.json` um CISA KEV, EPSS
 Score/Percentile und die P1--P4-Priorisierung.
 
-``` bash
+```bash
 /usr/local/bin/trivy_threatintel.py /var/lib/trivy/results/checkmk.json
 jq '.threat_intel' /var/lib/trivy/results/checkmk.json
 jq '.priority_counts, .priority_meta.signals' /var/lib/trivy/results/checkmk.json
@@ -244,7 +245,7 @@ Verfügung.
 
 Der produktive Ablauf ist:
 
-``` text
+```text
 1. trivy_scan.sh
 2. trivy_reduce.sh
 3. trivy_threatintel.py
@@ -256,7 +257,7 @@ Netzwerkfehler nicht den vorhandenen lokalen Report unbrauchbar machen.
 
 Manueller Test:
 
-``` bash
+```bash
 /usr/local/bin/trivy_checkmk_wrapper.sh
 echo $?
 tail -100 /var/log/trivy_checkmk.log
@@ -266,7 +267,7 @@ Erwarteter Returncode: `0`.
 
 Wichtige Prüfungen:
 
-``` bash
+```bash
 jq '{host: .host, scanner_warnings: .scanner_warnings, operational_counts: .operational_counts}' \
   /var/lib/trivy/results/checkmk.json
 
@@ -279,7 +280,7 @@ jq '.threat_intel' /var/lib/trivy/results/checkmk.json
 Der Wrapper sollte regelmäßig als `root` laufen. Beispiel Cron alle
 sechs Stunden:
 
-``` cron
+```cron
 0 */6 * * * root /usr/local/bin/trivy_checkmk_wrapper.sh
 ```
 
@@ -289,7 +290,7 @@ Für produktive Systeme ist ein systemd Timer vorzuziehen.
 
 Das MKP benötigt Checkmk `2.5.0p10` oder neuer und enthält:
 
-``` text
+```text
 Agents
   plugins/trivy_report
 
@@ -304,7 +305,7 @@ Libraries
 
 Als Checkmk-Site-User Paket installieren/aktivieren und prüfen:
 
-``` bash
+```bash
 mkp list
 mkp show trivy_report 1.3.0
 cmk-validate-plugins
@@ -316,7 +317,7 @@ Die Validierung muss ohne Fehler durchlaufen.
 
 In Checkmk:
 
-``` text
+```text
 Setup
 -> Agents
 -> Windows, Linux, Solaris, AIX
@@ -329,44 +330,43 @@ und das neue Agentpaket verteilen.
 
 Debian/Ubuntu:
 
-``` bash
+```bash
 dpkg -i check-mk-agent_*.deb
 ```
 
 RHEL/Rocky/Alma:
 
-``` bash
+```bash
 rpm -U check-mk-agent-*.rpm
 ```
 
 Typischer Pluginpfad auf dem Host:
 
-``` text
+```text
 /usr/lib/check_mk_agent/plugins/trivy_report
 ```
 
 Prüfen:
 
-``` bash
+```bash
 /usr/lib/check_mk_agent/plugins/trivy_report | head -30
 ```
 
 Die Ausgabe muss mit folgender Section beginnen:
 
-``` text
+```text
 <<<trivy_report:sep(0)>>>
 ```
 
 ## 10. Daten auf dem Checkmk-Server prüfen
 
-``` bash
+```bash
 cmk -d HOSTNAME | grep -A20 -B2 '<<<trivy_report'
 ```
 
-Danach Service Discovery durchführen und Changes aktivieren. Für einen
-CLI-Test:
+Danach Service Discovery durchführen und Changes aktivieren. Für einen CLI-Test:
 
-``` bash
+```bash
 cmk -IIv HOSTNAME
 cmk -nv HOSTNAME
 ```
@@ -375,18 +375,18 @@ cmk -nv HOSTNAME
 
 Empfohlene Ausgangskonfiguration:
 
-  Signal                  WARN       CRIT
-  ----------------- ---------- ----------
-  P1 -- Immediate     disabled          1
-  P2 -- High                 1   disabled
-  P3 -- Normal        disabled   disabled
-  P4 -- Review        disabled   disabled
-  CISA KEV            disabled          1
-  Report age               8 h       14 h
+| Signal | WARN | CRIT |
+| --- | ---: | ---: |
+| P1 -- Immediate | disabled | 1 |
+| P2 -- High | 1 | disabled |
+| P3 -- Normal | disabled | disabled |
+| P4 -- Review | disabled | disabled |
+| CISA KEV | disabled | 1 |
+| Report age | 8 h | 14 h |
 
 Damit gilt standardmäßig:
 
-``` text
+```text
 P1 >= 1       -> CRIT
 P2 >= 1       -> WARN
 KEV >= 1      -> CRIT
@@ -400,8 +400,7 @@ aber in dieser Standardkonfiguration keinen Alarm aus.
 ## 12. Prioritätsmodell
 
 **P1 -- Immediate:** höchste operative Priorität, insbesondere bei
-starken Exploit-/Threat-Intelligence-Signalen und tatsächlicher
-Hostrelevanz.
+starken Exploit-/Threat-Intelligence-Signalen und tatsächlicher Hostrelevanz.
 
 **P2 -- High:** hohe operative Priorität, z. B. Vendor Severity `HIGH`
 zusammen mit `ACTION_REQUIRED`.
@@ -416,7 +415,7 @@ geprüft bzw. dokumentiert werden sollen.
 
 Das System trennt bewusst:
 
-``` text
+```text
 CVSS
 Vendor Severity
 Operational Classification
@@ -435,7 +434,7 @@ wahrscheinliche Ausnutzung.
 
 Unter anderem werden erzeugt:
 
-``` text
+```text
 trivy_priority_p1
 trivy_priority_p2
 trivy_priority_p3
@@ -461,13 +460,13 @@ Servicezustand.
 
 ## 15. Funktionstest
 
-``` bash
+```bash
 cmk -nv HOSTNAME | grep 'Trivy Report'
 ```
 
 Beispiel:
 
-``` text
+```text
 Trivy Report  P1: 0, P2: 1, P3: 50, P4: 1233, KEV: 0, Report age: 2.0 h
 ```
 
@@ -475,13 +474,13 @@ Mit der empfohlenen Regel ist dies `WARN`, weil `P2 = 1`.
 
 Effektive Parameter prüfen:
 
-``` bash
+```bash
 cmk -D HOSTNAME | grep trivy_report
 ```
 
 Gespeicherten Zustand via Livestatus prüfen:
 
-``` bash
+```bash
 lq "GET services
 Columns: description state hard_state plugin_output last_check
 Filter: host_name = HOSTNAME
@@ -490,32 +489,31 @@ Filter: description = Trivy Report"
 
 Statuswerte:
 
-``` text
+```text
 0 = OK
 1 = WARN
 2 = CRIT
 3 = UNKNOWN
 ```
 
-
 ## 16. Fehlersuche
 
 Agentplugin lokal:
 
-``` bash
+```bash
 /usr/lib/check_mk_agent/plugins/trivy_report
 ```
 
 JSON validieren:
 
-``` bash
+```bash
 jq empty /var/lib/trivy/results/checkmk.json
 echo $?
 ```
 
 Wrapper/Log:
 
-``` bash
+```bash
 /usr/local/bin/trivy_checkmk_wrapper.sh
 echo $?
 tail -100 /var/log/trivy_checkmk.log
@@ -523,14 +521,14 @@ tail -100 /var/log/trivy_checkmk.log
 
 Threat Intelligence/Priorität:
 
-``` bash
+```bash
 jq '.threat_intel' /var/lib/trivy/results/checkmk.json
 jq '.priority_counts' /var/lib/trivy/results/checkmk.json
 ```
 
 Checkmk:
 
-``` bash
+```bash
 cmk-validate-plugins
 cmk -d HOSTNAME | grep -A20 '<<<trivy_report'
 cmk -nv HOSTNAME
@@ -541,7 +539,7 @@ cmk -D HOSTNAME | grep trivy_report
 
 Grundlegende Erreichbarkeit kann geprüft werden mit:
 
-``` bash
+```bash
 curl -I https://github.com
 curl -I https://ghcr.io
 curl -I https://aquasecurity.github.io
@@ -555,7 +553,7 @@ automatisch, dass die Registry blockiert ist.
 Durch den Hostnamen im Dateinamen können Reports später zentral
 gesammelt werden:
 
-``` text
+```text
 reports/
   trivy_report_host01.html
   trivy_report_host02.html
@@ -567,7 +565,7 @@ Hosts aufgebaut werden.
 
 ## 19. Kurzinstallation
 
-``` text
+```text
 1. Trivy + jq + Python 3 installieren
 2. /var/lib/trivy/results anlegen
 3. trivy-host-scripts-1.3.0.tar.gz entpacken und Skripte nach /usr/local/bin kopieren
@@ -586,10 +584,10 @@ Hosts aufgebaut werden.
 
 ## Externe Dokumentation
 
--   Trivy Installation:
-    https://trivy.dev/docs/latest/getting-started/installation/
--   Checkmk Linux Agent:
-    https://docs.checkmk.com/latest/en/agent_linux.html
+- Trivy Installation:
+  https://trivy.dev/docs/latest/getting-started/installation/
+- Checkmk Linux Agent:
+  https://docs.checkmk.com/latest/en/agent_linux.html
 
 ## Hinweis
 
