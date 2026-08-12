@@ -76,6 +76,28 @@ def classification_text(classification):
     )
 
 
+
+def priority_class(level):
+    level = str(level or "P4").upper()
+
+    return {
+        "P1": "priority-p1",
+        "P2": "priority-p2",
+        "P3": "priority-p3",
+        "P4": "priority-p4",
+    }.get(level, "priority-p4")
+
+
+def percent_text(value, decimals=2):
+    if value is None:
+        return "Not available"
+
+    try:
+        return f"{float(value) * 100:.{decimals}f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def score_text(score):
     if score is None:
         return "No CVSS"
@@ -467,6 +489,16 @@ def create_html(data):
         or {}
     )
 
+    threat_intel_meta = (
+        data.get("threat_intel")
+        or {}
+    )
+
+    priority_counts = (
+        data.get("priority_counts")
+        or {}
+    )
+
     os_name = e(
         host.get("os_name"),
         "Unknown Linux",
@@ -551,7 +583,28 @@ def create_html(data):
         ):
             score = -1.0
 
+        priority_level = str(
+            (
+                cve.get("priority")
+                or {}
+            ).get(
+                "level",
+                "P4",
+            )
+        ).upper()
+
+        priority_order = {
+            "P1": 4,
+            "P2": 3,
+            "P3": 2,
+            "P4": 1,
+        }
+
         return (
+            priority_order.get(
+                priority_level,
+                1,
+            ),
             CLASSIFICATION_ORDER.get(
                 classification,
                 1,
@@ -720,6 +773,68 @@ def create_html(data):
             cve.get("category")
             or "unknown"
         ).lower()
+
+        priority = (
+            cve.get("priority")
+            or {}
+        )
+
+        priority_level = str(
+            priority.get("level")
+            or "P4"
+        ).upper()
+
+        priority_name = str(
+            priority.get("name")
+            or "REVIEW"
+        ).upper()
+
+        priority_reason = e(
+            priority.get("reason"),
+            "No priority reason provided",
+        )
+
+        priority_css = priority_class(
+            priority_level
+        )
+
+        threat_intel = (
+            cve.get("threat_intel")
+            or {}
+        )
+
+        kev = (
+            threat_intel.get("cisa_kev")
+            or {}
+        )
+
+        epss = (
+            threat_intel.get("epss")
+            or {}
+        )
+
+        kev_known = bool(
+            kev.get("known_exploited")
+        )
+
+        kev_badge = (
+            '<span class="ti-badge kev-yes">CISA KEV</span>'
+            if kev_known
+            else '<span class="ti-badge kev-no">No KEV</span>'
+        )
+
+        epss_score = epss.get("score")
+        epss_percentile = epss.get("percentile")
+
+        epss_display = percent_text(
+            epss_score,
+            2,
+        )
+
+        epss_percentile_display = percent_text(
+            epss_percentile,
+            1,
+        )
 
         title = e(
             cve.get("title"),
@@ -1025,6 +1140,7 @@ def create_html(data):
                 data-classification="{classification_css}"
                 data-severity="{severity_css}"
                 data-category="{e(category)}"
+                data-priority="{e(priority_level.lower())}"
                 data-search="{html.escape(searchable, quote=True)}"
             >
 
@@ -1040,6 +1156,15 @@ def create_html(data):
                             <div class="cve-title">
                                 {cve_id}
                             </div>
+
+                            <span
+                                class="
+                                    priority-badge
+                                    {priority_css}
+                                "
+                            >
+                                {e(priority_level)} {e(priority_name)}
+                            </span>
 
                             <span
                                 class="
@@ -1072,6 +1197,16 @@ def create_html(data):
 
                             {reason}
 
+                        </div>
+
+                        <div class="threat-line">
+                            {kev_badge}
+                            <span class="ti-badge epss">
+                                EPSS {e(epss_display)}
+                            </span>
+                            <span class="ti-muted">
+                                Percentile {e(epss_percentile_display)}
+                            </span>
                         </div>
 
                     </div>
@@ -1218,6 +1353,51 @@ def create_html(data):
 
                     </section>
 
+                    <section class="info-section">
+
+                        <h3>Operational priority</h3>
+
+                        <div class="property-grid">
+
+                            <div class="property-name">Priority</div>
+                            <div>
+                                <span class="priority-badge {priority_css}">
+                                    {e(priority_level)} {e(priority_name)}
+                                </span>
+                            </div>
+
+                            <div class="property-name">Reason</div>
+                            <div>{priority_reason}</div>
+
+                        </div>
+
+                    </section>
+
+                    <section class="info-section">
+
+                        <h3>Threat intelligence</h3>
+
+                        <div class="property-grid">
+
+                            <div class="property-name">CISA KEV</div>
+                            <div>{kev_badge}</div>
+
+                            <div class="property-name">EPSS probability</div>
+                            <div>{e(epss_display)}</div>
+
+                            <div class="property-name">EPSS percentile</div>
+                            <div>{e(epss_percentile_display)}</div>
+
+                            <div class="property-name">KEV date added</div>
+                            <div>{e(kev.get("date_added"), "Not applicable")}</div>
+
+                            <div class="property-name">KEV due date</div>
+                            <div>{e(kev.get("due_date"), "Not applicable")}</div>
+
+                        </div>
+
+                    </section>
+
                     {
                         render_runtime_section(
                             cve
@@ -1304,6 +1484,25 @@ def create_html(data):
         classification_counts[
             "SUPPRESSED"
         ]
+    )
+
+    p1_count = int(priority_counts.get("p1", 0))
+    p2_count = int(priority_counts.get("p2", 0))
+    p3_count = int(priority_counts.get("p3", 0))
+    p4_count = int(priority_counts.get("p4", 0))
+
+    kev_count = int(
+        (
+            threat_intel_meta.get("cisa_kev")
+            or {}
+        ).get("matched_cves", 0)
+    )
+
+    epss_scored_count = int(
+        (
+            threat_intel_meta.get("epss")
+            or {}
+        ).get("scored_cves", 0)
     )
 
     return f"""<!DOCTYPE html>
@@ -1397,6 +1596,88 @@ h3 {{
 
 .summary-card.suppressed {{
     border-color: #3d6551;
+}}
+
+.summary-card.p1 {{
+    border-color: #a83b3b;
+}}
+
+.summary-card.p2 {{
+    border-color: #b06f2d;
+}}
+
+.summary-card.p3 {{
+    border-color: #4f6f97;
+}}
+
+.summary-card.p4 {{
+    border-color: #656d78;
+}}
+
+.priority-badge {{
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border: 1px solid transparent;
+}}
+
+.priority-p1 {{
+    background: #5a2020;
+    border-color: #a83b3b;
+}}
+
+.priority-p2 {{
+    background: #5b3a18;
+    border-color: #b06f2d;
+}}
+
+.priority-p3 {{
+    background: #253a53;
+    border-color: #4f6f97;
+}}
+
+.priority-p4 {{
+    background: #343a42;
+    border-color: #656d78;
+}}
+
+.threat-line {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    align-items: center;
+    margin-top: 8px;
+}}
+
+.ti-badge {{
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    border: 1px solid #3c4652;
+    background: #202731;
+}}
+
+.kev-yes {{
+    background: #5a2020;
+    border-color: #a83b3b;
+    font-weight: 700;
+}}
+
+.kev-no {{
+    color: #9ca8b5;
+}}
+
+.epss {{
+    background: #263548;
+}}
+
+.ti-muted {{
+    color: #87929e;
+    font-size: 11px;
 }}
 
 .summary-card.clickable {{
@@ -1913,6 +2194,36 @@ code {{
 
 <section class="summary">
 
+    <div class="summary-card p1 clickable" onclick="filterByPriority('p1')">
+        <div class="summary-value">{p1_count}</div>
+        <div class="summary-label">P1 Immediate</div>
+    </div>
+
+    <div class="summary-card p2 clickable" onclick="filterByPriority('p2')">
+        <div class="summary-value">{p2_count}</div>
+        <div class="summary-label">P2 High</div>
+    </div>
+
+    <div class="summary-card p3 clickable" onclick="filterByPriority('p3')">
+        <div class="summary-value">{p3_count}</div>
+        <div class="summary-label">P3 Normal</div>
+    </div>
+
+    <div class="summary-card p4 clickable" onclick="filterByPriority('p4')">
+        <div class="summary-value">{p4_count}</div>
+        <div class="summary-label">P4 Review</div>
+    </div>
+
+    <div class="summary-card">
+        <div class="summary-value">{kev_count}</div>
+        <div class="summary-label">CISA KEV</div>
+    </div>
+
+    <div class="summary-card">
+        <div class="summary-value">{epss_scored_count}</div>
+        <div class="summary-label">EPSS scored</div>
+    </div>
+
     <div class="summary-card clickable" onclick="resetAllFilters()">
 
         <div class="summary-value">
@@ -2160,6 +2471,32 @@ code {{
     <div class="filter-section">
 
         <span class="filter-label">
+            Priority
+        </span>
+
+        <div class="filters">
+
+            <button
+                class="priority-filter active"
+                data-filter="all"
+                onclick="setPriorityFilter(this)"
+            >
+                All
+            </button>
+
+            <button class="priority-filter" data-filter="p1" onclick="setPriorityFilter(this)">P1</button>
+            <button class="priority-filter" data-filter="p2" onclick="setPriorityFilter(this)">P2</button>
+            <button class="priority-filter" data-filter="p3" onclick="setPriorityFilter(this)">P3</button>
+            <button class="priority-filter" data-filter="p4" onclick="setPriorityFilter(this)">P4</button>
+
+        </div>
+
+    </div>
+
+
+    <div class="filter-section">
+
+        <span class="filter-label">
             Severity
         </span>
 
@@ -2288,6 +2625,8 @@ code {{
     vulnerability severity indicator.
 
     CVSS is shown as reference information only.
+    Operational priority combines runtime classification,
+    vendor severity, CISA KEV and EPSS.
 
     SUPPRESSED means the reducer found technical
     evidence that the finding is not applicable
@@ -2305,6 +2644,7 @@ code {{
 let activeClassFilter = "all";
 let activeSeverityFilter = "all";
 let activeCategoryFilter = "all";
+let activePriorityFilter = "all";
 
 
 function activateFilterButton(selector, value) {{
@@ -2362,11 +2702,40 @@ function filterBySeverity(value) {{
 }}
 
 
+function filterByPriority(value) {{
+
+    activePriorityFilter = value;
+
+    activateFilterButton(
+        ".priority-filter",
+        value
+    );
+
+    applyFilters();
+    scrollToResults();
+}}
+
+
+function setPriorityFilter(button) {{
+
+    activePriorityFilter =
+        button.dataset.filter;
+
+    activateFilterButton(
+        ".priority-filter",
+        activePriorityFilter
+    );
+
+    applyFilters();
+}}
+
+
 function resetAllFilters() {{
 
     activeClassFilter = "all";
     activeSeverityFilter = "all";
     activeCategoryFilter = "all";
+    activePriorityFilter = "all";
 
     document
         .getElementById("search")
@@ -2384,6 +2753,11 @@ function resetAllFilters() {{
 
     activateFilterButton(
         ".category-filter",
+        "all"
+    );
+
+    activateFilterButton(
+        ".priority-filter",
         "all"
     );
 

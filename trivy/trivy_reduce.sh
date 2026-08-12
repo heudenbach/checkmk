@@ -1,9 +1,12 @@
 #!/bin/bash
 
 set -u
+set -o pipefail
 
-INPUT="/var/lib/trivy/results/rootfs.json"
-OUTPUT="/var/lib/trivy/results/checkmk.json"
+RESULT_DIR="${TRIVY_RESULT_DIR:-/var/lib/trivy/results}"
+INPUT="${TRIVY_INPUT:-${RESULT_DIR}/rootfs.json}"
+OUTPUT="${TRIVY_OUTPUT:-${RESULT_DIR}/checkmk.json}"
+SCAN_LOG="${TRIVY_SCAN_LOG:-${RESULT_DIR}/trivy_scan.stderr.log}"
 TMP="${OUTPUT}.tmp"
 
 if [[ ! -f "$INPUT" ]]; then
@@ -33,32 +36,59 @@ fi
 case "$OS_ID" in
     ubuntu)
         VENDOR_KEY="ubuntu"
+        DISTRO_FAMILY="debian"
         ;;
     debian)
         VENDOR_KEY="debian"
+        DISTRO_FAMILY="debian"
         ;;
-    rhel)
+    rhel|centos|centos_stream|fedora)
         VENDOR_KEY="redhat"
+        DISTRO_FAMILY="redhat"
         ;;
     rocky)
         VENDOR_KEY="rocky"
+        DISTRO_FAMILY="redhat"
         ;;
     almalinux)
         VENDOR_KEY="alma"
+        DISTRO_FAMILY="redhat"
         ;;
-    ol)
+    ol|oracle)
         VENDOR_KEY="oracle-oval"
+        DISTRO_FAMILY="redhat"
         ;;
     amzn)
         VENDOR_KEY="amazon"
+        DISTRO_FAMILY="redhat"
+        ;;
+    sles|sled|opensuse*|suse)
+        VENDOR_KEY="suse"
+        DISTRO_FAMILY="suse"
         ;;
     azurelinux|mariner)
         VENDOR_KEY="cbl-mariner"
+        DISTRO_FAMILY="redhat"
         ;;
     *)
         VENDOR_KEY="$OS_ID"
+        if command -v dpkg-query >/dev/null 2>&1; then
+            DISTRO_FAMILY="debian"
+        elif command -v rpm >/dev/null 2>&1; then
+            DISTRO_FAMILY="rpm"
+        else
+            DISTRO_FAMILY="unknown"
+        fi
         ;;
 esac
+
+if command -v dpkg-query >/dev/null 2>&1; then
+    PACKAGE_BACKEND="dpkg"
+elif command -v rpm >/dev/null 2>&1; then
+    PACKAGE_BACKEND="rpm"
+else
+    PACKAGE_BACKEND="unknown"
+fi
 
 #
 # ------------------------------------------------------------
@@ -69,6 +99,88 @@ esac
 RUNNING_KERNEL="$(uname -r 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 KERNEL_CONFIG="/boot/config-${RUNNING_KERNEL}"
+RUNNING_KERNEL_PACKAGE="unknown"
+RUNNING_KERNEL_PACKAGE_VERSION="unknown"
+
+if [[ "$PACKAGE_BACKEND" == "dpkg" ]]; then
+    RUNNING_KERNEL_PACKAGE="$(
+        dpkg-query -S "/boot/vmlinuz-${RUNNING_KERNEL}" 2>/dev/null             | head -1             | cut -d: -f1             | sed 's/:.*$//'
+    )"
+
+    if [[ -n "$RUNNING_KERNEL_PACKAGE" ]]; then
+        RUNNING_KERNEL_PACKAGE_VERSION="$(
+            dpkg-query -W -f='${Version}' "$RUNNING_KERNEL_PACKAGE" 2>/dev/null                 || echo unknown
+        )"
+    else
+        RUNNING_KERNEL_PACKAGE="unknown"
+    fi
+
+elif [[ "$PACKAGE_BACKEND" == "rpm" ]]; then
+
+    # First try the virtual provide used by many RPM kernel packages.
+    # Important: rpm may print "no package provides ..." to stdout while
+    # returning a non-zero exit code. Filter that text so it is never stored
+    # as a package name/version.
+    RUNNING_KERNEL_PACKAGE="$(
+        rpm -q \
+            --whatprovides "kernel-uname-r = ${RUNNING_KERNEL}" \
+            --qf '%{NAME}\n' \
+            2>/dev/null \
+        | grep -v '^no package provides ' \
+        | head -1
+    )"
+
+    RUNNING_KERNEL_PACKAGE_VERSION="$(
+        rpm -q \
+            --whatprovides "kernel-uname-r = ${RUNNING_KERNEL}" \
+            --qf '%{VERSION}-%{RELEASE}\n' \
+            2>/dev/null \
+        | grep -v '^no package provides ' \
+        | head -1
+    )"
+
+    # RHEL and some RPM derivatives do not necessarily expose the running
+    # kernel through kernel-uname-r. Fall back to the RPM package owning the
+    # actual running kernel image or module tree.
+    if [[ -z "$RUNNING_KERNEL_PACKAGE" ]]; then
+
+        for candidate in \
+            "/boot/vmlinuz-${RUNNING_KERNEL}" \
+            "/usr/lib/modules/${RUNNING_KERNEL}" \
+            "/lib/modules/${RUNNING_KERNEL}"
+        do
+            [[ -e "$candidate" ]] || continue
+
+            pkg="$(
+                rpm -qf "$candidate" \
+                    --qf '%{NAME}\n' \
+                    2>/dev/null \
+                | grep -v '^file .* is not owned by any package' \
+                | head -1
+            )"
+
+            pkg_version="$(
+                rpm -qf "$candidate" \
+                    --qf '%{VERSION}-%{RELEASE}\n' \
+                    2>/dev/null \
+                | grep -v '^file .* is not owned by any package' \
+                | head -1
+            )"
+
+            if [[ -n "$pkg" ]]; then
+                RUNNING_KERNEL_PACKAGE="$pkg"
+                RUNNING_KERNEL_PACKAGE_VERSION="$pkg_version"
+                break
+            fi
+        done
+    fi
+
+    [[ -n "$RUNNING_KERNEL_PACKAGE" ]] \
+        || RUNNING_KERNEL_PACKAGE="unknown"
+
+    [[ -n "$RUNNING_KERNEL_PACKAGE_VERSION" ]] \
+        || RUNNING_KERNEL_PACKAGE_VERSION="unknown"
+fi
 
 #
 # ------------------------------------------------------------
@@ -123,6 +235,24 @@ AVAILABLE_MODULES_JSON="$(
 
 #
 # ------------------------------------------------------------
+# Built-in modules for the running kernel
+# ------------------------------------------------------------
+# modules.builtin is more reliable than guessing CONFIG symbols from a
+# component name and works on Debian as well as RHEL-family systems.
+#
+
+BUILTIN_MODULES_JSON="$(
+    builtin_file="/lib/modules/${RUNNING_KERNEL}/modules.builtin"
+    [[ -r "$builtin_file" ]] || builtin_file="/usr/lib/modules/${RUNNING_KERNEL}/modules.builtin"
+
+    if [[ -r "$builtin_file" ]]; then
+        sed -E             -e 's#^.*/##'             -e 's/\.ko(\.(xz|gz|zst))?$//'             -e 's/-/_/g'             "$builtin_file" 2>/dev/null         | tr '[:upper:]' '[:lower:]'         | sort -u         | jq -R -s 'split("\n") | map(select(length > 0))'
+    else
+        echo '[]'
+    fi
+)"
+
+# ------------------------------------------------------------
 # Kernel CONFIG_xxx=m
 # ------------------------------------------------------------
 #
@@ -171,125 +301,81 @@ CONFIG_BUILTIN_JSON="$(
 
 #
 # ------------------------------------------------------------
-# Installed packages
+# Installed packages and runtime package ownership
 # ------------------------------------------------------------
+#
+# Runtime evidence means:
+#   - executable belongs to a process running >= 60 seconds
+#   OR
+#   - file/library from package is mapped by such a process
+#
+# Debian/Ubuntu use dpkg-query -S.
+# RPM systems (RHEL, Rocky, Alma, Oracle Linux, Fedora, Amazon Linux,
+# SUSE and compatible distributions) use rpm -qf.
 #
 
 INSTALLED_PACKAGES_JSON="$(
-    if command -v dpkg-query >/dev/null 2>&1; then
-
-        dpkg-query -W -f='${binary:Package}\n' 2>/dev/null \
-            | sed 's/:.*$//' \
-            | sort -u \
-            | jq -R -s '
-                split("\n")
-                | map(select(length > 0))
-            '
-
-    elif command -v rpm >/dev/null 2>&1; then
-
-        rpm -qa --qf '%{NAME}\n' 2>/dev/null \
-            | sort -u \
-            | jq -R -s '
-                split("\n")
-                | map(select(length > 0))
-            '
-
+    if [[ "$PACKAGE_BACKEND" == "dpkg" ]]; then
+        dpkg-query -W -f='${binary:Package}\n' 2>/dev/null             | sed 's/:.*$//'             | sort -u             | jq -R -s 'split("\n") | map(select(length > 0))'
+    elif [[ "$PACKAGE_BACKEND" == "rpm" ]]; then
+        rpm -qa --qf '%{NAME}\n' 2>/dev/null             | sort -u             | jq -R -s 'split("\n") | map(select(length > 0))'
     else
         echo '[]'
     fi
 )"
 
-#
-# ------------------------------------------------------------
-# Runtime-used packages
-# ------------------------------------------------------------
-#
-# Runtime evidence means:
-#
-#   - executable belongs to a process running >= 60 seconds
-#   OR
-#   - file/library from package is mapped by such a process
-#
-# The 60 second threshold prevents the reducer itself
-# (jq, sort, awk, dpkg-query, etc.) from making packages
-# look operationally active.
-#
+package_owner() {
+    local file="$1"
+
+    if [[ "$PACKAGE_BACKEND" == "dpkg" ]]; then
+        dpkg-query -S "$file" 2>/dev/null             | head -1             | cut -d: -f1             | sed 's/:.*$//'
+    elif [[ "$PACKAGE_BACKEND" == "rpm" ]]; then
+        rpm -qf "$file" --qf '%{NAME}\n' 2>/dev/null             | head -1
+    fi
+}
 
 RUNTIME_PACKAGES_JSON="$(
     {
-        #
-        # Running executables
-        #
-
+        # Executables of long-running processes.
         for proc in /proc/[0-9]*; do
-
             pid="${proc##*/}"
-
-            etimes="$(
-                ps -o etimes= -p "$pid" 2>/dev/null \
-                    | tr -d ' '
-            )"
-
+            etimes="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')"
             [[ "$etimes" =~ ^[0-9]+$ ]] || continue
             (( etimes >= 60 )) || continue
 
-            exe="$(
-                readlink -f "$proc/exe" 2>/dev/null
-            )" || continue
-
+            exe="$(readlink -f "$proc/exe" 2>/dev/null)" || continue
             [[ -n "$exe" ]] || continue
-
-            dpkg-query -S "$exe" 2>/dev/null \
-                | head -1 \
-                | cut -d: -f1
+            package_owner "$exe"
         done
 
-        #
-        # Files / libraries mapped by running processes
-        #
-
+        # Mapped files/libraries of long-running processes.
         for proc in /proc/[0-9]*; do
-
             pid="${proc##*/}"
-
-            etimes="$(
-                ps -o etimes= -p "$pid" 2>/dev/null \
-                    | tr -d ' '
-            )"
-
+            etimes="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')"
             [[ "$etimes" =~ ^[0-9]+$ ]] || continue
             (( etimes >= 60 )) || continue
-
             [[ -r "$proc/maps" ]] || continue
 
-            awk '
-                $6 ~ /^\// {
-                    print $6
-                }
-            ' "$proc/maps" 2>/dev/null
-
-        done \
-        | sort -u \
-        | while IFS= read -r file; do
-
-            dpkg-query -S "$file" 2>/dev/null \
-                | head -1 \
-                | cut -d: -f1
-
+            awk '$6 ~ /^\// { print $6 }' "$proc/maps" 2>/dev/null
+        done         | sed 's/ (deleted)$//'         | sort -u         | while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            package_owner "$file"
         done
-
-    } \
-    | sed 's/:.*$//' \
-    | grep -v '^$' \
-    | sort -u \
-    | jq -R -s '
-        split("\n")
-        | map(select(length > 0))
-    '
+    }     | grep -v '^$'     | sort -u     | jq -R -s 'split("\n") | map(select(length > 0))'
 )"
 
-#
+# Trivy may warn that it found an advisory/CVE reference but cannot load
+# vulnerability details (for example after a CVE was rejected/withdrawn).
+# Preserve those IDs as scanner metadata instead of silently treating them
+# as normal UNKNOWN vulnerabilities.
+UNRESOLVED_CVES_JSON="$(
+    if [[ -r "$SCAN_LOG" ]]; then
+        grep -F 'Unable to get vulnerability details' "$SCAN_LOG" 2>/dev/null             | grep -oE 'CVE-[0-9]{4}-[0-9]+'             | sort -u             | jq -R -s 'split("\n") | map(select(length > 0))'
+    else
+        echo '[]'
+    fi
+)"
+
 # ------------------------------------------------------------
 # Reducer
 # ------------------------------------------------------------
@@ -300,14 +386,20 @@ jq \
     --arg os_name "$OS_NAME" \
     --arg os_version "$OS_VERSION" \
     --arg vendor_key "$VENDOR_KEY" \
+    --arg distro_family "$DISTRO_FAMILY" \
+    --arg package_backend "$PACKAGE_BACKEND" \
     --arg running_kernel "$RUNNING_KERNEL" \
+    --arg running_kernel_package "$RUNNING_KERNEL_PACKAGE" \
+    --arg running_kernel_package_version "$RUNNING_KERNEL_PACKAGE_VERSION" \
     --arg arch "$ARCH" \
     --argjson loaded_modules "$LOADED_MODULES_JSON" \
     --argjson available_modules "$AVAILABLE_MODULES_JSON" \
+    --argjson builtin_modules "$BUILTIN_MODULES_JSON" \
     --argjson config_modules "$CONFIG_MODULES_JSON" \
     --argjson config_builtin "$CONFIG_BUILTIN_JSON" \
     --argjson installed_packages "$INSTALLED_PACKAGES_JSON" \
     --argjson runtime_packages "$RUNTIME_PACKAGES_JSON" \
+    --argjson unresolved_cves "$UNRESOLVED_CVES_JSON" \
 '
 #
 # ------------------------------------------------------------
@@ -378,6 +470,11 @@ def module_available($m):
     ($m | normalize_module) as $n
     | ($available_modules | index($n)) != null;
 
+def module_builtin($m):
+
+    ($m | normalize_module) as $n
+    | ($builtin_modules | index($n)) != null;
+
 def config_symbol($component):
 
     $component
@@ -399,101 +496,150 @@ def config_builtin($component):
 # Kernel package detection
 # ------------------------------------------------------------
 #
-
-def is_kernel_package:
-
-    (.package // "") as $p
-    |
-    (
-        ($p | test("^linux-image-"))
-        or
-        ($p | test("^linux-modules-"))
-        or
-        ($p | test("^linux-modules-extra-"))
-        or
-        ($p | test("^linux-headers-"))
-        or
-        ($p | test("^linux-tools-"))
-        or
-        ($p == "linux-tools-common")
-        or
-        ($p == "linux-libc-dev")
-    );
-
-def is_kernel_support_package:
-
-    (.package // "") as $p
-    |
-    (
-        ($p | test("^linux-headers-"))
-        or
-        ($p | test("^linux-tools-"))
-        or
-        ($p == "linux-tools-common")
-        or
-        ($p == "linux-libc-dev")
-    );
+# Debian/Ubuntu and RPM distributions use different package layouts.
+# RHEL-family runtime packages are typically kernel/core/modules variants;
+# devel/headers/tools are support packages and do not represent the running
+# kernel by themselves.
+#
 
 def is_kernel_runtime_package:
-
     (.package // "") as $p
     |
-    (
-        ($p | test("^linux-image-"))
-        or
-        ($p | test("^linux-modules-"))
-        or
-        ($p | test("^linux-modules-extra-"))
-    );
+    # Strongest cross-distribution signal: the finding belongs to the
+    # package that owns the currently running kernel image/module tree.
+    if (
+        $running_kernel_package != "unknown"
+        and $p == $running_kernel_package
+    ) then
+        true
 
-#
+    elif $distro_family == "debian" then
+        (
+            ($p | test("^linux-image-[0-9]"))
+            or ($p | test("^linux-image-.*-(generic|amd64|cloud|rt|lowlatency|azure|aws|gcp|oracle)$"))
+            or ($p | test("^linux-modules-[0-9]"))
+            or ($p | test("^linux-modules-extra-[0-9]"))
+        )
+
+    elif ($distro_family == "redhat" or $distro_family == "rpm") then
+        (
+            ($p == "kernel")
+            or ($p | test("^kernel-(core|modules|modules-core|modules-extra)$"))
+            or ($p | test("^kernel-debug($|-(core|modules|modules-core|modules-extra)$)"))
+            or ($p | test("^kernel-rt($|-(core|modules|modules-core|modules-extra)$)"))
+            or ($p | test("^kernel-uek($|-(core|modules|modules-core|modules-extra)$)"))
+        )
+
+    elif $distro_family == "suse" then
+        (
+            ($p | test("^kernel-(default|default-base|default-extra|preempt|rt)$"))
+            or ($p | test("^kernel-(azure|vanilla)$"))
+        )
+
+    else
+        # Unknown distributions are deliberately conservative.  Only
+        # packages that look like actual kernel image/module packages are
+        # considered runtime kernel packages.  Support/devel packages are
+        # explicitly excluded.
+        (
+            (
+                ($p | test("^linux-(image|modules)-"))
+                or ($p | test("^kernel($|-(core|modules|modules-core|modules-extra)$)"))
+            )
+            and
+            ($p | test("(headers|devel|source|tools|tools-libs|syms|macros|perf)"; "i") | not)
+        )
+    end;
+
+
+def is_kernel_support_package:
+    (.package // "") as $p
+    |
+    if $distro_family == "debian" then
+        (
+            ($p | test("^linux-headers-"))
+            or ($p | test("^linux-tools-"))
+            or ($p == "linux-tools-common")
+            or ($p == "linux-libc-dev")
+            or ($p == "linux-perf")
+            or ($p == "perf")
+        )
+
+    elif ($distro_family == "redhat" or $distro_family == "rpm") then
+        (
+            ($p | test("^kernel-(devel|headers|tools|tools-libs|abi-stablelists)$"))
+            or ($p | test("^kernel-(debug|rt|uek)-(devel|headers)$"))
+            or ($p == "python3-perf")
+            or ($p == "perf")
+            or ($p == "bpftool")
+        )
+
+    elif $distro_family == "suse" then
+        (
+            ($p | test("^kernel-(devel|source|syms|macros)$"))
+            or ($p == "perf")
+        )
+
+    else
+        ($p | test("(headers|devel|source|tools|tools-libs|syms|macros|perf)"; "i"))
+    end;
+
+
+def is_kernel_package:
+    # Compatibility/helper flag: any kernel-runtime OR kernel-adjacent
+    # support/userspace package.  Classification as category=kernel is NOT
+    # based on this flag; only is_kernel_runtime_package may do that.
+    (is_kernel_runtime_package or is_kernel_support_package);
+
 # ------------------------------------------------------------
-# Kernel ABI helpers
+# Kernel ABI/version helpers
 # ------------------------------------------------------------
-#
+
+def strip_epoch:
+    sub("^[0-9]+:"; "");
 
 def kernel_abi_from_package:
-
-    (.package // "") as $p
-    |
-    (
-        [
-            $p
-            | capture(
-                "(?<abi>[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+)"
-            )?
-            | .abi
-        ]
-        | first // null
-    );
+    if $distro_family == "debian" then
+        (.package // "") as $p
+        | ([ $p | capture("(?<abi>[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+)")? | .abi ] | first // null)
+    else
+        (.installed_version // null)
+        | if . == null then null else strip_epoch end
+    end;
 
 def running_kernel_abi:
+    if $distro_family == "debian" then
+        ([ $running_kernel | capture("(?<abi>[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+)")? | .abi ] | first // null)
+    else
+        if $running_kernel_package_version == "unknown"
+        then $running_kernel
+        else $running_kernel_package_version
+        end
+    end;
 
-    (
-        [
-            $running_kernel
-            | capture(
-                "(?<abi>[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]+)"
-            )?
-            | .abi
-        ]
-        | first // null
-    );
-
-def is_old_kernel:
-
+def kernel_matches_running:
     kernel_abi_from_package as $pkg
     | running_kernel_abi as $run
     |
-    (
-        $pkg != null
-        and
-        $run != null
-        and
-        $pkg != $run
-    );
+    if ($pkg == null or $run == null or $pkg == "" or $run == "") then
+        false
+    elif $distro_family == "debian" then
+        $pkg == $run
+    else
+        # RPM kernel uname commonly has an architecture suffix while the
+        # package EVR does not. Prefix comparison handles both forms.
+        (($run | startswith($pkg)) or ($pkg | startswith($run)))
+    end;
 
-#
+def is_old_kernel:
+    if (is_kernel_runtime_package | not) then
+        false
+    else
+        kernel_abi_from_package as $pkg
+        | running_kernel_abi as $run
+        | ($pkg != null and $run != null and (kernel_matches_running | not))
+    end;
+
 # ------------------------------------------------------------
 # Architecture detection
 # ------------------------------------------------------------
@@ -766,15 +912,25 @@ def assess_kernel_component($component):
                 )
         }
 
-    elif config_builtin($component) then
+    elif module_builtin($component) then
 
         {
             state: "present_builtin",
             reason:
                 (
-                    "Kernel component "
+                    "Kernel module "
                     + $component
-                    + " is built into the running kernel"
+                    + " is built into the running kernel (modules.builtin)"
+                )
+        }
+
+    elif config_builtin($component) then
+
+        {
+            state: "present_builtin_config",
+            reason:
+                (
+                    "A matching CONFIG_ symbol is built into the running kernel; component mapping is heuristic"
                 )
         }
 
@@ -1000,11 +1156,16 @@ def assess_kernel_component($component):
         [
             $group[]
             | select(
-                .kernel_package == true
+                .kernel_runtime_package == true
             )
         ]
         | length > 0
     ) as $is_kernel
+
+    # A CVE that only occurs in headers/tools/perf/devel packages is a
+    # userspace/package CVE for operational classification.  This prevents
+    # support packages from inheriting running-kernel relevance merely
+    # because their names are kernel-related.
 
     #
     # Highest severity
@@ -1180,7 +1341,7 @@ def assess_kernel_component($component):
     | (
 
         #
-        # Normal Ubuntu package
+        # Normal userspace package
         #
 
         if ($is_kernel | not) then
@@ -1275,10 +1436,10 @@ def assess_kernel_component($component):
 
             {
                 classification:
-                    "SUPPRESSED",
+                    "REVIEW",
 
                 relevance:
-                    "architecture_not_applicable",
+                    "architecture_mismatch_detected",
 
                 reason:
                     (
@@ -1335,7 +1496,7 @@ def assess_kernel_component($component):
 
             {
                 classification:
-                    "SUPPRESSED",
+                    "REVIEW",
 
                 relevance:
                     "kernel_component_not_present",
@@ -1359,7 +1520,7 @@ def assess_kernel_component($component):
 
             {
                 classification:
-                    "SUPPRESSED",
+                    "REVIEW",
 
                 relevance:
                     "kernel_component_inactive",
@@ -1377,6 +1538,8 @@ def assess_kernel_component($component):
 
         elif (
             $kernel_runtime.state == "active"
+            or
+            $kernel_runtime.state == "present_builtin"
             or
             $kernel_runtime.state == "potentially_active"
         )
@@ -1656,11 +1819,23 @@ def assess_kernel_component($component):
         vendor_key:
             $vendor_key,
 
+        distro_family:
+            $distro_family,
+
+        package_backend:
+            $package_backend,
+
         architecture:
             $arch,
 
         running_kernel:
             $running_kernel,
+
+        running_kernel_package:
+            $running_kernel_package,
+
+        running_kernel_package_version:
+            $running_kernel_package_version,
 
         loaded_kernel_modules:
             $loaded_modules,
@@ -1677,11 +1852,24 @@ def assess_kernel_component($component):
                 | length
             ),
 
+        builtin_kernel_modules_count:
+            (
+                $builtin_modules
+                | length
+            ),
+
         runtime_packages_count:
             (
                 $runtime_packages
                 | length
             )
+    },
+
+    scanner_warnings: {
+        unresolved_vulnerability_details:
+            $unresolved_cves,
+        unresolved_vulnerability_details_count:
+            ($unresolved_cves | length)
     },
 
     #
@@ -1953,6 +2141,10 @@ echo "Reduced Trivy result written to: $OUTPUT"
 echo "Operating system: $OS_NAME $OS_VERSION"
 echo "Running kernel: $RUNNING_KERNEL"
 echo "Architecture: $ARCH"
+echo "Distribution family: $DISTRO_FAMILY"
+echo "Package backend: $PACKAGE_BACKEND"
+echo "Running kernel package: $RUNNING_KERNEL_PACKAGE"
+echo "Running kernel package version: $RUNNING_KERNEL_PACKAGE_VERSION"
 echo
 
 jq -r '
