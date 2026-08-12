@@ -3,7 +3,62 @@
 Integration von Trivy in Checkmk mit Vendor-Severity, Laufzeitrelevanz,
 CISA KEV, EPSS und P1--P4-Priorisierung.
 
-> Stand: MKP `trivy_report` 1.3.0, Checkmk \>= 2.5.0p10.
+> Stand: MKP `trivy_report` 1.3.0, Checkmk >= 2.5.0p10.
+
+## Was macht diese Integration?
+
+Die Lösung verbindet einen lokalen Trivy-Schwachstellenscan mit einer
+betriebsorientierten Bewertung und Checkmk-Monitoring.
+
+Der Ablauf besteht aus mehreren Stufen:
+
+1. **Trivy** scannt den Linux-Host auf bekannte Schwachstellen.
+2. **Reducer** bewertet die Ergebnisse im Kontext des tatsächlich laufenden
+   Systems, unter anderem anhand von Distribution, Architektur, laufenden
+   Paketen, Kernel und Kernelmodulen.
+3. **Threat Intelligence** ergänzt die CVEs um CISA KEV und EPSS.
+4. Aus Vendor-Severity, Runtime-Relevanz und Threat Intelligence entsteht
+   eine operative **P1--P4-Priorisierung**.
+5. **Checkmk** überwacht diese Prioritäten und kann über frei konfigurierbare
+   Schwellwerte WARN und CRIT erzeugen.
+6. Zusätzlich wird ein ausführlicher **HTML-Report** erzeugt, der die
+   Einzelbefunde und ihre Bewertung sichtbar macht.
+
+### Checkmk Service
+
+Der Checkmk-Service zeigt die operative Zusammenfassung direkt im Monitoring:
+
+![Trivy Service in Checkmk](https://cf.eude.rocks/gitimg/trivy_service_cmk.png)
+
+### Checkmk Metriken
+
+Die Integration liefert zusätzlich Metriken für Prioritäten, Vendor-Severity,
+operative Klassifikation, CISA KEV, EPSS und Reportalter:
+
+![Trivy Checkmk Metrics](https://cf.eude.rocks/gitimg/trivy_service_metrics.png)
+
+### HTML Vulnerability Report
+
+Neben der kompakten Checkmk-Ansicht wird bei jedem erfolgreichen Lauf ein
+eigenständiger, detaillierter **HTML Vulnerability Report** erzeugt:
+
+![Trivy HTML Vulnerability Report](https://cf.eude.rocks/gitimg/trivy_html_report_example.png)
+
+Der HTML-Report ist für die Detailanalyse gedacht: Checkmk beantwortet
+vor allem die Frage, **ob Handlungsbedarf besteht**; der HTML-Report zeigt
+die zugrunde liegenden CVEs und deren Bewertung.
+
+Er wird unter `/var/lib/trivy/results/` abgelegt. Der Dateiname enthält den
+Hostnamen, beispielsweise:
+
+```text
+trivy_report_mail.html
+trivy_report_she2-mon-l-001.html
+```
+
+Die HTML-Datei kann direkt im Browser geöffnet, über einen Webserver
+bereitgestellt oder später zusammen mit den Reports anderer Hosts an einer
+zentralen Stelle gesammelt werden.
 
 ## 1. Architektur
 
@@ -83,9 +138,16 @@ Die Skripte liegen unter `/usr/local/bin/`, die Ergebnisse unter
 
 ## 5. Skripte installieren
 
-Folgende Dateien aus dem Repository nach `/usr/local/bin/` kopieren:
+Die benötigten Host-Skripte werden für Release 1.3.0 gemeinsam als Archiv
+bereitgestellt:
 
-``` text
+```text
+trivy-host-scripts-1.3.0.tar.gz
+```
+
+Das Archiv enthält:
+
+```text
 trivy_scan.sh
 trivy_reduce.sh
 trivy_threatintel.py
@@ -93,9 +155,25 @@ trivy_html.py
 trivy_checkmk_wrapper.sh
 ```
 
+Archiv entpacken:
+
+```bash
+tar xzf trivy-host-scripts-1.3.0.tar.gz
+```
+
+Anschließend die entpackten Skripte nach `/usr/local/bin/` kopieren:
+
+```bash
+cp trivy_scan.sh /usr/local/bin/
+cp trivy_reduce.sh /usr/local/bin/
+cp trivy_threatintel.py /usr/local/bin/
+cp trivy_html.py /usr/local/bin/
+cp trivy_checkmk_wrapper.sh /usr/local/bin/
+```
+
 Rechte setzen:
 
-``` bash
+```bash
 chown root:root /usr/local/bin/trivy_*
 chmod 755 /usr/local/bin/trivy_*
 ```
@@ -147,9 +225,20 @@ jq '.threat_intel' /var/lib/trivy/results/checkmk.json
 jq '.priority_counts, .priority_meta.signals' /var/lib/trivy/results/checkmk.json
 ```
 
-`trivy_html.py` erzeugt einen HTML-Report. Der Hostname wird an den
-Dateinamen angehängt, damit Reports mehrerer Hosts später zentral
-gesammelt werden können.
+`trivy_html.py` erzeugt zusätzlich einen eigenständigen, detaillierten
+HTML-Report. Der Hostname wird an den Dateinamen angehängt, damit Reports
+mehrerer Hosts später zentral gesammelt werden können.
+
+Der Report liegt unter `/var/lib/trivy/results/`, zum Beispiel:
+
+```text
+/var/lib/trivy/results/trivy_report_mail.html
+```
+
+Er kann direkt mit einem Browser geöffnet oder über einen Webserver
+bereitgestellt werden. Damit steht neben dem kompakten Checkmk-Service
+eine ausführliche Ansicht für die Analyse der einzelnen Schwachstellen zur
+Verfügung.
 
 ## 6. Wrapper ausführen
 
@@ -408,23 +497,8 @@ Statuswerte:
 3 = UNKNOWN
 ```
 
-## 16. Achtung: Service State Translation
 
-Checkmk kann Servicezustände nachträglich übersetzen. Eine hostweite
-Regel `WARN -> OK` kann deshalb dazu führen, dass das Trivy-Plugin
-korrekt WARN liefert, die GUI aber trotzdem OK zeigt.
-
-Bei unerwartetem Verhalten unter Setup nach **Service state
-translation** suchen. Regeln sollten möglichst auf den tatsächlich
-gemeinten Service eingeschränkt werden. Soll beispielsweise nur der
-Checkmk-Agent-Service betroffen sein, kann die Servicebeschreibung auf
-folgendes Regex begrenzt werden:
-
-``` regex
-^Check_MK$
-```
-
-## 17. Fehlersuche
+## 16. Fehlersuche
 
 Agentplugin lokal:
 
@@ -463,7 +537,7 @@ cmk -nv HOSTNAME
 cmk -D HOSTNAME | grep trivy_report
 ```
 
-## 18. Netzwerkzugriff
+## 17. Netzwerkzugriff
 
 Grundlegende Erreichbarkeit kann geprüft werden mit:
 
@@ -476,7 +550,7 @@ curl -I https://aquasecurity.github.io
 Ein HTTP `405` von `ghcr.io` auf einen HEAD-Request bedeutet nicht
 automatisch, dass die Registry blockiert ist.
 
-## 19. Zentrale HTML-Reports
+## 18. Zentrale HTML-Reports
 
 Durch den Hostnamen im Dateinamen können Reports später zentral
 gesammelt werden:
@@ -491,12 +565,12 @@ reports/
 Darauf kann später eine zentrale Übersichtsseite über alle überwachten
 Hosts aufgebaut werden.
 
-## 20. Kurzinstallation
+## 19. Kurzinstallation
 
 ``` text
 1. Trivy + jq + Python 3 installieren
 2. /var/lib/trivy/results anlegen
-3. Trivy-Skripte nach /usr/local/bin kopieren
+3. trivy-host-scripts-1.3.0.tar.gz entpacken und Skripte nach /usr/local/bin kopieren
 4. Wrapper testen
 5. checkmk.json und HTML-Report prüfen
 6. MKP trivy_report 1.3.0 installieren
@@ -508,7 +582,6 @@ Hosts aufgebaut werden.
 12. Trivy-Service-Regel erstellen
 13. P1/P2/P3/P4/KEV/Report-age konfigurieren
 14. cmk -nv HOSTNAME testen
-15. bei falschem Status Service State Translation prüfen
 ```
 
 ## Externe Dokumentation
