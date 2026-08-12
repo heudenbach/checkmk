@@ -1,68 +1,525 @@
-First, install Trivy on your Host(s) Example Ubuntu:
+# Trivy Vulnerability Monitoring for Checkmk
 
-sudo apt-get update
-sudo apt-get install -y wget gnupg
+Integration von Trivy in Checkmk mit Vendor-Severity, Laufzeitrelevanz,
+CISA KEV, EPSS und P1--P4-Priorisierung.
+
+> Stand: MKP `trivy_report` 1.3.0, Checkmk \>= 2.5.0p10.
+
+## 1. Architektur
+
+``` text
+Trivy
+  -> trivy_scan.sh -> /var/lib/trivy/results/rootfs.json
+  -> trivy_reduce.sh -> /var/lib/trivy/results/checkmk.json
+  -> trivy_threatintel.py -> CISA KEV + EPSS + P1-P4
+  -> trivy_html.py -> trivy_report_<hostname>.html
+  -> Checkmk Agent Plugin -> <<<trivy_report>>>
+  -> Checkmk Server / MKP -> Service "Trivy Report"
+```
+
+Die operative Bewertung verwendet bevorzugt die Einschätzung des
+jeweiligen Distributions-/Paket-Vendors. CVSS bleibt als technische
+Information erhalten, bestimmt aber nicht allein die Priorität. Runtime-
+und Kernel-Relevanz sowie KEV/EPSS ergänzen die Bewertung.
+
+## 2. Voraussetzungen
+
+Auf dem überwachten Linux-Host werden benötigt:
+
+-   Trivy
+-   Python 3
+-   `jq`
+-   Checkmk Agent
+-   ausgehender HTTPS-Zugriff für Trivy und Threat Intelligence
+
+Getestet wurde die Logik insbesondere mit Ubuntu/Debian sowie RHEL;
+Rocky Linux und AlmaLinux verwenden ebenfalls das RPM-Paketbackend.
+
+## 3. Trivy installieren
+
+### Ubuntu / Debian
+
+``` bash
+apt-get update
+apt-get install -y wget gnupg jq python3
 
 wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
   | gpg --dearmor \
-  | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+  | tee /usr/share/keyrings/trivy.gpg >/dev/null
 
 echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
-  | sudo tee /etc/apt/sources.list.d/trivy.list
+  > /etc/apt/sources.list.d/trivy.list
 
-sudo apt-get update
-sudo apt-get install -y trivy
+apt-get update
+apt-get install -y trivy
+trivy --version
+```
 
-After this, configure your Trivy to Run
+### RHEL / Rocky Linux / AlmaLinux
 
+``` bash
+cat >/etc/yum.repos.d/trivy.repo <<'EOF'
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
+EOF
 
-The Scripts i provide, Scan the Host with the exception of:
-cifs, smb3, nfs, nfs4, tmpfs
+dnf install -y trivy jq python3
+trivy --version
+```
 
-The Full Trivy Report will be available as json under path:
+## 4. Verzeichnisse
+
+``` bash
+mkdir -p /var/lib/trivy/results
+chmod 755 /var/lib/trivy /var/lib/trivy/results
+```
+
+Die Skripte liegen unter `/usr/local/bin/`, die Ergebnisse unter
+`/var/lib/trivy/results/`.
+
+## 5. Skripte installieren
+
+Folgende Dateien aus dem Repository nach `/usr/local/bin/` kopieren:
+
+``` text
+trivy_scan.sh
+trivy_reduce.sh
+trivy_threatintel.py
+trivy_html.py
+trivy_checkmk_wrapper.sh
+```
+
+Rechte setzen:
+
+``` bash
+chown root:root /usr/local/bin/trivy_*
+chmod 755 /usr/local/bin/trivy_*
+```
+
+### Verarbeitung
+
+`trivy_scan.sh` erzeugt die Trivy-Rohdaten in:
+
+``` text
 /var/lib/trivy/results/rootfs.json
+```
 
-And the Filtered Report for the CMK-Plugin will be under path:
+`trivy_reduce.sh` erzeugt den für Monitoring und Reporting aufbereiteten
+Report:
+
+``` text
 /var/lib/trivy/results/checkmk.json
+```
 
-The Filtered Report will contain:
-CVE; CVSS; Pakage; Installed/Fixed Version and Location
+Der Reducer erkennt unter anderem Distribution, Vendor-Key,
+Paketbackend, Architektur, laufenden Kernel, Kernelpaket,
+geladene/verfügbare Kernelmodule und Runtime-Nutzung betroffener Pakete.
 
-The Filtered Report is generatet with the trivy_reduce.sh Script
+Kernelzustände können beispielsweise sein:
 
-The trivy_wrapper.sh executes first the trivy.sh, then the trivy_reduce.sh
+``` text
+active
+inactive
+present_builtin
+present_builtin_config
+available_not_loaded
+not_present
+unknown
+```
 
-place the three trivy scripts at /usr/local/bin/
+Die operative Klassifikation verwendet insbesondere:
 
-and att to your crontab:
-0 */6 * * * flock -n /var/run/trivy_checkmk.lock /usr/local/bin/trivy_wrapper.sh
+``` text
+ACTION_REQUIRED
+REVIEW
+```
 
-This executes all 6 hours - flock checks so that no 2 scans overlap
+`trivy_threatintel.py` ergänzt `checkmk.json` um CISA KEV, EPSS
+Score/Percentile und die P1--P4-Priorisierung.
 
+``` bash
+/usr/local/bin/trivy_threatintel.py /var/lib/trivy/results/checkmk.json
+jq '.threat_intel' /var/lib/trivy/results/checkmk.json
+jq '.priority_counts, .priority_meta.signals' /var/lib/trivy/results/checkmk.json
+```
 
+`trivy_html.py` erzeugt einen HTML-Report. Der Hostname wird an den
+Dateinamen angehängt, damit Reports mehrerer Hosts später zentral
+gesammelt werden können.
 
-Trivy Vulnerability Report for Checkmk
+## 6. Wrapper ausführen
 
-Requirements
- ├─ Checkmk >= 2.5.0p10
- ├─ Trivy installed on monitored host
- ├─ Periodic Trivy scan
- └─ /var/lib/trivy/results/checkmk.json
+Der produktive Ablauf ist:
 
-Host
- Trivy
-   ↓
- rootfs.json
-   ↓ reducer
- checkmk.json
-   ↓
- Checkmk Agent Plugin
-   ↓
- <<<trivy_report>>>
-   ↓
- Checkmk Server
-   ├─ Agent Section
-   ├─ Check Plugin
-   ├─ Ruleset
-   └─ Metrics
+``` text
+1. trivy_scan.sh
+2. trivy_reduce.sh
+3. trivy_threatintel.py
+4. trivy_html.py
+```
 
+Threat Intelligence ist Enrichment und soll bei einem temporären
+Netzwerkfehler nicht den vorhandenen lokalen Report unbrauchbar machen.
+
+Manueller Test:
+
+``` bash
+/usr/local/bin/trivy_checkmk_wrapper.sh
+echo $?
+tail -100 /var/log/trivy_checkmk.log
+```
+
+Erwarteter Returncode: `0`.
+
+Wichtige Prüfungen:
+
+``` bash
+jq '{host: .host, scanner_warnings: .scanner_warnings, operational_counts: .operational_counts}' \
+  /var/lib/trivy/results/checkmk.json
+
+jq '.priority_counts' /var/lib/trivy/results/checkmk.json
+jq '.threat_intel' /var/lib/trivy/results/checkmk.json
+```
+
+## 7. Regelmäßige Ausführung
+
+Der Wrapper sollte regelmäßig als `root` laufen. Beispiel Cron alle
+sechs Stunden:
+
+``` cron
+0 */6 * * * root /usr/local/bin/trivy_checkmk_wrapper.sh
+```
+
+Für produktive Systeme ist ein systemd Timer vorzuziehen.
+
+## 8. MKP `trivy_report` 1.3.0 installieren
+
+Das MKP benötigt Checkmk `2.5.0p10` oder neuer und enthält:
+
+``` text
+Agents
+  plugins/trivy_report
+
+Additional Checkmk plug-ins by third parties
+  trivy/agent_based/trivy_report.py
+  trivy/rulesets/ruleset_trivy_report.py
+  trivy/rulesets/ruleset_trivy_bakery.py
+
+Libraries
+  python3/cmk/base/cee/plugins/bakery/trivy_report_bakery.py
+```
+
+Als Checkmk-Site-User Paket installieren/aktivieren und prüfen:
+
+``` bash
+mkp list
+mkp show trivy_report 1.3.0
+cmk-validate-plugins
+```
+
+Die Validierung muss ohne Fehler durchlaufen.
+
+## 9. Agent-Bakery-Regel
+
+In Checkmk:
+
+``` text
+Setup
+-> Agents
+-> Windows, Linux, Solaris, AIX
+-> Agent rules
+```
+
+Nach der vom MKP bereitgestellten Trivy-Regel suchen, sie aktivieren und
+auf die gewünschten Hosts einschränken. Danach **Bake agents** ausführen
+und das neue Agentpaket verteilen.
+
+Debian/Ubuntu:
+
+``` bash
+dpkg -i check-mk-agent_*.deb
+```
+
+RHEL/Rocky/Alma:
+
+``` bash
+rpm -U check-mk-agent-*.rpm
+```
+
+Typischer Pluginpfad auf dem Host:
+
+``` text
+/usr/lib/check_mk_agent/plugins/trivy_report
+```
+
+Prüfen:
+
+``` bash
+/usr/lib/check_mk_agent/plugins/trivy_report | head -30
+```
+
+Die Ausgabe muss mit folgender Section beginnen:
+
+``` text
+<<<trivy_report:sep(0)>>>
+```
+
+## 10. Daten auf dem Checkmk-Server prüfen
+
+``` bash
+cmk -d HOSTNAME | grep -A20 -B2 '<<<trivy_report'
+```
+
+Danach Service Discovery durchführen und Changes aktivieren. Für einen
+CLI-Test:
+
+``` bash
+cmk -IIv HOSTNAME
+cmk -nv HOSTNAME
+```
+
+## 11. Service-Regel `Trivy vulnerability report`
+
+Empfohlene Ausgangskonfiguration:
+
+  Signal                  WARN       CRIT
+  ----------------- ---------- ----------
+  P1 -- Immediate     disabled          1
+  P2 -- High                 1   disabled
+  P3 -- Normal        disabled   disabled
+  P4 -- Review        disabled   disabled
+  CISA KEV            disabled          1
+  Report age               8 h       14 h
+
+Damit gilt standardmäßig:
+
+``` text
+P1 >= 1       -> CRIT
+P2 >= 1       -> WARN
+KEV >= 1      -> CRIT
+Report >= 8h  -> WARN
+Report >= 14h -> CRIT
+```
+
+P3 und P4 bleiben sichtbar und werden als Metriken gespeichert, lösen
+aber in dieser Standardkonfiguration keinen Alarm aus.
+
+## 12. Prioritätsmodell
+
+**P1 -- Immediate:** höchste operative Priorität, insbesondere bei
+starken Exploit-/Threat-Intelligence-Signalen und tatsächlicher
+Hostrelevanz.
+
+**P2 -- High:** hohe operative Priorität, z. B. Vendor Severity `HIGH`
+zusammen mit `ACTION_REQUIRED`.
+
+**P3 -- Normal:** auf dem Host operativ relevant und `ACTION_REQUIRED`,
+aber ohne P1-/P2-Eskalation.
+
+**P4 -- Review:** Befunde ohne unmittelbare Remediation-Eskalation, die
+geprüft bzw. dokumentiert werden sollen.
+
+## 13. Vendor Severity, CVSS, KEV und EPSS
+
+Das System trennt bewusst:
+
+``` text
+CVSS
+Vendor Severity
+Operational Classification
+Threat Intelligence
+Priority
+```
+
+CVSS bleibt erhalten. Für die praktische Darstellung und Priorisierung
+wird jedoch bevorzugt die Bewertung des zur Distribution passenden
+Vendors verwendet. Runtime-/Kernel-Relevanz entscheidet zusätzlich, ob
+ein Befund auf dem konkreten Host tatsächlich handlungsrelevant ist.
+CISA KEV und EPSS ergänzen diese Bewertung um bekannte bzw.
+wahrscheinliche Ausnutzung.
+
+## 14. Checkmk-Metriken
+
+Unter anderem werden erzeugt:
+
+``` text
+trivy_priority_p1
+trivy_priority_p2
+trivy_priority_p3
+trivy_priority_p4
+trivy_kev
+trivy_epss_scored
+trivy_action_required
+trivy_review
+trivy_suppressed
+trivy_remediation_required
+trivy_fix_available
+trivy_critical
+trivy_high
+trivy_medium
+trivy_low
+trivy_unknown
+trivy_total_cves
+trivy_report_age
+```
+
+Severity-Metriken bleiben sichtbar, bestimmen aber nicht mehr direkt den
+Servicezustand.
+
+## 15. Funktionstest
+
+``` bash
+cmk -nv HOSTNAME | grep 'Trivy Report'
+```
+
+Beispiel:
+
+``` text
+Trivy Report  P1: 0, P2: 1, P3: 50, P4: 1233, KEV: 0, Report age: 2.0 h
+```
+
+Mit der empfohlenen Regel ist dies `WARN`, weil `P2 = 1`.
+
+Effektive Parameter prüfen:
+
+``` bash
+cmk -D HOSTNAME | grep trivy_report
+```
+
+Gespeicherten Zustand via Livestatus prüfen:
+
+``` bash
+lq "GET services
+Columns: description state hard_state plugin_output last_check
+Filter: host_name = HOSTNAME
+Filter: description = Trivy Report"
+```
+
+Statuswerte:
+
+``` text
+0 = OK
+1 = WARN
+2 = CRIT
+3 = UNKNOWN
+```
+
+## 16. Achtung: Service State Translation
+
+Checkmk kann Servicezustände nachträglich übersetzen. Eine hostweite
+Regel `WARN -> OK` kann deshalb dazu führen, dass das Trivy-Plugin
+korrekt WARN liefert, die GUI aber trotzdem OK zeigt.
+
+Bei unerwartetem Verhalten unter Setup nach **Service state
+translation** suchen. Regeln sollten möglichst auf den tatsächlich
+gemeinten Service eingeschränkt werden. Soll beispielsweise nur der
+Checkmk-Agent-Service betroffen sein, kann die Servicebeschreibung auf
+folgendes Regex begrenzt werden:
+
+``` regex
+^Check_MK$
+```
+
+## 17. Fehlersuche
+
+Agentplugin lokal:
+
+``` bash
+/usr/lib/check_mk_agent/plugins/trivy_report
+```
+
+JSON validieren:
+
+``` bash
+jq empty /var/lib/trivy/results/checkmk.json
+echo $?
+```
+
+Wrapper/Log:
+
+``` bash
+/usr/local/bin/trivy_checkmk_wrapper.sh
+echo $?
+tail -100 /var/log/trivy_checkmk.log
+```
+
+Threat Intelligence/Priorität:
+
+``` bash
+jq '.threat_intel' /var/lib/trivy/results/checkmk.json
+jq '.priority_counts' /var/lib/trivy/results/checkmk.json
+```
+
+Checkmk:
+
+``` bash
+cmk-validate-plugins
+cmk -d HOSTNAME | grep -A20 '<<<trivy_report'
+cmk -nv HOSTNAME
+cmk -D HOSTNAME | grep trivy_report
+```
+
+## 18. Netzwerkzugriff
+
+Grundlegende Erreichbarkeit kann geprüft werden mit:
+
+``` bash
+curl -I https://github.com
+curl -I https://ghcr.io
+curl -I https://aquasecurity.github.io
+```
+
+Ein HTTP `405` von `ghcr.io` auf einen HEAD-Request bedeutet nicht
+automatisch, dass die Registry blockiert ist.
+
+## 19. Zentrale HTML-Reports
+
+Durch den Hostnamen im Dateinamen können Reports später zentral
+gesammelt werden:
+
+``` text
+reports/
+  trivy_report_host01.html
+  trivy_report_host02.html
+  trivy_report_host03.html
+```
+
+Darauf kann später eine zentrale Übersichtsseite über alle überwachten
+Hosts aufgebaut werden.
+
+## 20. Kurzinstallation
+
+``` text
+1. Trivy + jq + Python 3 installieren
+2. /var/lib/trivy/results anlegen
+3. Trivy-Skripte nach /usr/local/bin kopieren
+4. Wrapper testen
+5. checkmk.json und HTML-Report prüfen
+6. MKP trivy_report 1.3.0 installieren
+7. cmk-validate-plugins
+8. Agent-Bakery-Regel für Trivy erstellen
+9. Agent backen und verteilen
+10. <<<trivy_report>>> prüfen
+11. Service Discovery
+12. Trivy-Service-Regel erstellen
+13. P1/P2/P3/P4/KEV/Report-age konfigurieren
+14. cmk -nv HOSTNAME testen
+15. bei falschem Status Service State Translation prüfen
+```
+
+## Externe Dokumentation
+
+-   Trivy Installation:
+    https://trivy.dev/docs/latest/getting-started/installation/
+-   Checkmk Linux Agent:
+    https://docs.checkmk.com/latest/en/agent_linux.html
+
+## Hinweis
+
+Dieses Projekt ist eine eigene Integration. Trivy und Checkmk sind
+eigenständige Projekte und unterliegen ihren jeweiligen Lizenzen und
+Supportbedingungen.

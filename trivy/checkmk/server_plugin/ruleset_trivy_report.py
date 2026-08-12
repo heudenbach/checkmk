@@ -18,18 +18,18 @@ from cmk.rulesets.v1.rule_specs import (
 )
 
 
-def _optional_threshold(title_text, help_text):
+def _optional_threshold(title_text, help_text, default_enabled=False):
     return CascadingSingleChoice(
         title=Title(title_text),
         help_text=Help(help_text),
-        prefill=DefaultValue("disabled"),
+        prefill=DefaultValue(
+            "enabled" if default_enabled else "disabled"
+        ),
         elements=[
             CascadingSingleChoiceElement(
                 name="disabled",
                 title=Title("Disabled"),
-                parameter_form=FixedValue(
-                    value=None,
-                ),
+                parameter_form=FixedValue(value=None),
             ),
             CascadingSingleChoiceElement(
                 name="enabled",
@@ -55,9 +55,7 @@ def _optional_age_threshold(title_text, help_text, default_hours):
             CascadingSingleChoiceElement(
                 name="disabled",
                 title=Title("Disabled"),
-                parameter_form=FixedValue(
-                    value=None,
-                ),
+                parameter_form=FixedValue(value=None),
             ),
             CascadingSingleChoiceElement(
                 name="enabled",
@@ -74,15 +72,17 @@ def _optional_age_threshold(title_text, help_text, default_hours):
     )
 
 
-def _severity_form(title_text):
+def _priority_form(title_text, help_text, warn_default=False, crit_default=False):
     return Dictionary(
         title=Title(title_text),
+        help_text=Help(help_text),
         elements={
             "warn_count": DictElement(
                 required=True,
                 parameter_form=_optional_threshold(
                     "WARN threshold",
                     f"Number of {title_text} findings required for WARN.",
+                    warn_default,
                 ),
             ),
             "crit_count": DictElement(
@@ -90,6 +90,7 @@ def _severity_form(title_text):
                 parameter_form=_optional_threshold(
                     "CRIT threshold",
                     f"Number of {title_text} findings required for CRIT.",
+                    crit_default,
                 ),
             ),
         },
@@ -100,31 +101,44 @@ def _parameter_form():
     return Dictionary(
         title=Title("Trivy vulnerability report"),
         elements={
-            "critical": DictElement(
+            "p1": DictElement(
                 required=True,
-                parameter_form=_severity_form("CRITICAL"),
+                parameter_form=_priority_form(
+                    "P1 - Immediate",
+                    "Highest operational priority. Normally includes known exploitation or other immediate-action conditions.",
+                    crit_default=True,
+                ),
             ),
-
-            "high": DictElement(
+            "p2": DictElement(
                 required=True,
-                parameter_form=_severity_form("HIGH"),
+                parameter_form=_priority_form(
+                    "P2 - High",
+                    "High operational priority, for example HIGH vendor severity combined with ACTION_REQUIRED.",
+                    warn_default=True,
+                ),
             ),
-
-            "medium": DictElement(
+            "p3": DictElement(
                 required=True,
-                parameter_form=_severity_form("MEDIUM"),
+                parameter_form=_priority_form(
+                    "P3 - Normal",
+                    "Runtime-relevant findings requiring action without P1/P2 escalation.",
+                ),
             ),
-
-            "low": DictElement(
+            "p4": DictElement(
                 required=True,
-                parameter_form=_severity_form("LOW"),
+                parameter_form=_priority_form(
+                    "P4 - Review",
+                    "Findings currently assigned to review rather than immediate remediation.",
+                ),
             ),
-
-            "unknown": DictElement(
+            "kev": DictElement(
                 required=True,
-                parameter_form=_severity_form("UNKNOWN"),
+                parameter_form=_priority_form(
+                    "CISA KEV",
+                    "Findings present in the CISA Known Exploited Vulnerabilities catalog.",
+                    crit_default=True,
+                ),
             ),
-
             "age_warn": DictElement(
                 required=True,
                 parameter_form=_optional_age_threshold(
@@ -133,7 +147,6 @@ def _parameter_form():
                     8,
                 ),
             ),
-
             "age_crit": DictElement(
                 required=True,
                 parameter_form=_optional_age_threshold(
